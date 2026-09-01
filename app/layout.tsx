@@ -6,6 +6,7 @@ import "./list-fixes.css";
 import "./search.css";
 import "./financials.css";
 import "./owner-navigation.css";
+import "./control-center.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
