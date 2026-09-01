@@ -4,7 +4,6 @@ import { useState } from "react";
 type Role="sales"|"owner"|"floor";
 type Modal="quote"|"invoice"|"lead"|"import"|"workorder"|"rate"|null;
 const salesNav=["Dashboard","Leads","Customers","Quotes","Invoices","Orders"];
-const ownerNav=["Control center","Customers","Leads","Orders","Invoices","Quotes","Work orders","Production calendar","Item rates","Inventory","Quality","Maintenance","Purchasing","Profit & loss","Reports","Settings & access"];
 const floorNav=["Production","Pack orders"];
 const customers=["Martin Supply","North Point Labs","Atlas Chemical"];
 const orders=[
@@ -41,7 +40,19 @@ export default function Home(){
 
 function Logo(){return <div className="logo">Make<span>Logic</span></div>}
 function RoleBar({role,setRole}:{role:Role;setRole:(r:Role)=>void}){return <nav className="rolebar" aria-label="Preview role">{(["sales","owner","floor"] as Role[]).map(r=><button key={r} onClick={()=>setRole(r)} className={role===r?"active":""}>{r==="sales"?"Sales Rep":r==="owner"?"Owner":"Warehouse"}</button>)}</nav>}
-function SideNav({role,nav,setNav}:{role:Role;nav:string;setNav:(v:string)=>void}){const items=role==="sales"?salesNav:role==="owner"?ownerNav:floorNav;return <aside className={role==="floor"?"floor-side":"sidebar"}><small>{role==="sales"?"SALES WORKSPACE":role==="owner"?"RUN THE BUSINESS":"WAREHOUSE FLOOR"}</small>{items.map(x=><button key={x} onClick={()=>setNav(x)} className={nav===x?"selected":""}>{x}</button>)}</aside>}
+function SideNav({role,nav,setNav}:{role:Role;nav:string;setNav:(v:string)=>void}){
+  if(role==="owner")return <OwnerNavigation nav={nav} setNav={setNav}/>;
+  const items=role==="sales"?salesNav:floorNav;
+  return <aside className={role==="floor"?"floor-side":"sidebar"}><small>{role==="sales"?"SALES WORKSPACE":"WAREHOUSE FLOOR"}</small>{items.map(x=><button key={x} onClick={()=>setNav(x)} className={nav===x?"selected":""}>{x}</button>)}</aside>
+}
+const ownerGroups=[
+  {label:"Sales & customers",items:["Customers","Leads","Orders","Invoices","Quotes"]},
+  {label:"Production",items:["Work orders","Production calendar","Quality","Maintenance"]},
+  {label:"Inventory & purchasing",items:["Inventory","Purchasing","Item rates"]},
+  {label:"Financials",items:["Profit & loss","Reports"]},
+  {label:"Administration",items:["Settings & access"]},
+];
+function OwnerNavigation({nav,setNav}:{nav:string;setNav:(v:string)=>void}){return <aside className="sidebar owner-sidebar"><small>OWNER WORKSPACE</small><button onClick={()=>setNav("Control center")} className={`owner-home ${nav==="Control center"?"selected":""}`}><span>⌂</span>Control center</button><div className="owner-nav-groups">{ownerGroups.map((group,index)=>{const active=group.items.includes(nav);return <details key={group.label} open={active||index===0}><summary><span>{group.label}</span><i>⌄</i></summary><div>{group.items.map(item=><button key={item} onClick={()=>setNav(item)} className={nav===item?"selected":""}>{item}</button>)}</div></details>})}</div></aside>}
 
 function SalesView({nav,setModal}:{nav:string;setModal:(m:Modal)=>void}){
   if(nav==="Leads")return <Leads setModal={setModal}/>;
