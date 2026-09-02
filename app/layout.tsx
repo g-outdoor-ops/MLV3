@@ -9,6 +9,7 @@ import "./owner-navigation.css";
 import "./control-center.css";
 import "./notifications.css";
 import "./month-calendar.css";
+import "./calendar-legend-fix.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
