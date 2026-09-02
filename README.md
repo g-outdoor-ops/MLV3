@@ -1,4 +1,32 @@
-# vinext-starter
+# MakeLogic v3
+
+Customers, quotes, orders, production, warehouse, inventory, quality, purchasing and money for EcoForm Bottles — one shared company record, three workspaces.
+
+## What is wired up
+
+- **Sales Rep** — dashboard with live KPIs and search; leads and customers (add, CSV import, edit, agreed prices per customer); quotes and invoices; **New order** with multiple items, a shipping choice from the rate table, discount (over the limit or under the floor → owner approval), a warehouse note and an invoice note. Each order shows a Placed → In production → Quality check → Ready → Shipped → Invoiced → Paid pipeline; once shipped, **Create invoice** and **Record payment** are one click. Quotes convert to orders; the production calendar shows work orders, due dates, deliveries and maintenance.
+- **Owner** — control center with live decisions (approvals, unscheduled work orders, quality holds, materials to order, overdue invoices, maintenance due), today's floor, live metrics and cash strip. Work orders (line, date, quantity, release, start, finish), production calendar (drag to move), quality (per-run checklist → pass to stock / scrap and re-run), maintenance (schedule, complete with downtime), inventory (finished goods with on-hand / promised / free; raw materials with reorder points; record movements; add items), purchasing (suggestions → PO → receive with landed cost rolled into unit cost), item rates (list, floor, minimum, discount limit, cost, material), P&L (COGS from item costs, margin by product), reports and CSV exports, settings (pricing rules, shipping rates, lines, QuickBooks, roles, warehouse link, backup, starter data).
+- **Warehouse** (`/?floor=<key>#warehouse`) — the running work order for the chosen line: +1 rack, +1 scrap, add any amount by racks or bottles, pause / problem, undo, quality note, finish → quality checks. Pack orders: mark packed, mark shipped (stock moves, invoice unlocks). A rotated key turns old tablet links away.
+
+Everything each role does updates the others. An order that exceeds free stock creates a work order for the owner; finishing a run puts it in Quality; passing quality adds to stock and moves the order to Ready; shipping removes stock and unlocks the invoice.
+
+## Code layout
+
+- `app/app-data.ts` — data model, EcoForm starter data, `normalize()` (fills defaults so data saved by earlier versions keeps loading), money/stock helpers.
+- `app/page.tsx` — shell: roles, navigation, load/save through `/api/state`, drawers and modals.
+- `app/components/store.tsx` — context and the shared row/tile components.
+- `app/components/sales.tsx`, `owner.tsx`, `floor.tsx` — the three workspaces.
+- `app/components/modals.tsx` — order/quote/invoice, work order, item rate, purchase order, maintenance, inventory, CRM forms.
+- `app/components/drawers.tsx` — order / document / work order / PO detail with every action, customer profile, notifications.
+- `app/api/state/route.ts` — one JSON document + audit log in Postgres (Render) or D1 (Cloudflare).
+
+Existing deployments keep their saved data. A database still holding the old Pure Alkaline test records shows a banner on the control center; **Settings & access → Load EcoForm starter data** replaces it.
+
+QuickBooks: the panel records the connection and marks invoices/customers as synced. The live Intuit OAuth + Invoice/Payment API calls are the next piece and need your Intuit developer keys.
+
+---
+
+## Starter notes (vinext)
 
 A clean full-stack starter running on
 [vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
