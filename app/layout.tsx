@@ -8,6 +8,7 @@ import "./financials.css";
 import "./owner-navigation.css";
 import "./control-center.css";
 import "./notifications.css";
+import "./month-calendar.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
