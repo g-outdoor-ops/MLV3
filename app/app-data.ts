@@ -1,44 +1,124 @@
-export type Customer={id:string;name:string;kind:"customer"|"lead";contact:string;email:string;phone:string;rep:string;stage:string;balance:number;lifetimeSales:number;billing:string;delivery:string;terms:string;notes:string};
-export type DocumentRecord={id:string;kind:"quote"|"invoice";customerId:string;item:string;cases:number;rate:number;discount:number;shipping:number;status:string;due:string;paid:number};
-export type OrderRecord={id:string;customerId:string;item:string;cases:number;quantity:number;due:string;status:string;payment:string};
-export type WorkOrder={id:string;orderId?:string;item:string;quantity:number;good:number;scrap:number;packed:number;date:string;status:string;purpose:string};
+// MakeLogic company data model.
+// Everything the app knows is one JSON document persisted through /api/state.
+// New fields are optional and filled in by normalize() so data saved by the
+// previous UI keeps loading.
+
+export type Customer={id:string;name:string;kind:"customer"|"lead";contact:string;email:string;phone:string;rep:string;stage:string;balance:number;lifetimeSales:number;billing:string;delivery:string;terms:string;notes:string;prices?:Record<string,number>;qb?:boolean};
+export type DocumentRecord={id:string;kind:"quote"|"invoice";customerId:string;item:string;cases:number;rate:number;discount:number;shipping:number;status:string;due:string;paid:number;orderId?:string;quantity?:number;qbSynced?:boolean;note?:string};
+export type OrderLine={item:string;quantity:number;rate:number};
+export type OrderRecord={id:string;customerId:string;item:string;cases:number;quantity:number;due:string;status:string;payment:string;
+  lines?:OrderLine[];shipMethod?:string;shipping?:number;discount?:number;notes?:string;invoiceNote?:string;stage?:number;invoiceId?:string;rep?:string;createdAt?:string};
+export type QcCheck={label:string;result:boolean|null};
+export type WorkOrder={id:string;orderId?:string;item:string;quantity:number;good:number;scrap:number;packed:number;date:string;status:string;purpose:string;line?:string;days?:number;qc?:QcCheck[];qcNote?:string;qcResult?:"pass"|"hold"|"scrap"|null};
 export type CalendarEvent={id:string;day:number;type:"order"|"stock"|"maintenance"|"delivery";title:string};
 export type Notice={id:string;title:string;detail:string;urgent:boolean;read:boolean;createdAt:string;target:string};
 export type Activity={id:string;customerId?:string;title:string;detail:string;actor:string;createdAt:string};
 export type RoleSetting={id:string;name:string;members:string[];permissions:Record<string,"none"|"view"|"edit">};
-export type AppData={customers:Customer[];documents:DocumentRecord[];orders:OrderRecord[];workOrders:WorkOrder[];calendar:CalendarEvent[];notices:Notice[];activities:Activity[];roles:RoleSetting[];itemRates:{id:string;item:string;rate:number;minimum:number;discountLimit:number}[];inventory:{id:string;item:string;onHand:number;committed:number;reorder:number;cost:number}[];settings:{company:string;ownerName:string;ownerEmail:string;warehouseToken:string;quickBooks:{connected:boolean;realmId:string;lastSync:string;customers:boolean;invoices:boolean;quotes:boolean;conflicts:number}}};
+export type ItemRate={id:string;item:string;rate:number;minimum:number;discountLimit:number;floor?:number;unitsPerCase?:number;kind?:"finished"|"raw";cost?:number;sub?:string;qcChecks?:string[];material?:string};
+export type InventoryRow={id:string;item:string;onHand:number;committed:number;reorder:number;cost:number;kind?:"finished"|"raw";unit?:string;onOrder?:number;eta?:string;usage?:string};
+export type ShipMethod={id:string;name:string;sub:string;rate:number;perCase?:number};
+export type AppData={customers:Customer[];documents:DocumentRecord[];orders:OrderRecord[];workOrders:WorkOrder[];calendar:CalendarEvent[];notices:Notice[];activities:Activity[];roles:RoleSetting[];itemRates:ItemRate[];inventory:InventoryRow[];
+  settings:{company:string;ownerName:string;ownerEmail:string;warehouseToken:string;lines?:string[];shipMethods?:ShipMethod[];discountApproval?:number;quickBooks:{connected:boolean;realmId:string;lastSync:string;customers:boolean;invoices:boolean;quotes:boolean;conflicts:number}}};
+
+export const STAGES=["Placed","In production","Quality check","Ready","Shipped","Invoiced","Paid"] as const;
+export const DEFAULT_QC=["Weight within spec","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish gauge","Handle pull test"];
+export const DEFAULT_SHIP:ShipMethod[]=[
+  {id:"pickup",name:"Customer picks up",sub:"Miami warehouse, Mon–Fri 8–4",rate:0},
+  {id:"truck",name:"Our truck · local delivery",sub:"Miami-Dade & Broward, next business day",rate:45},
+  {id:"ltl",name:"Freight (LTL) · palletized",sub:"Quote from carrier, 3–5 days",rate:312},
+  {id:"ups",name:"UPS Ground · by the box",sub:"Small orders only, 1–4 days",rate:0,perCase:6.4},
+];
+
+const today=new Date();const iso=(d:number)=>{const x=new Date(today);x.setDate(x.getDate()+d);return x.toISOString().slice(0,10)};
+const label=(d:number)=>{const x=new Date(today);x.setDate(x.getDate()+d);return x.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})};
 
 export const seedData:AppData={
  customers:[
-  {id:"c1",name:"Martin Supply",kind:"customer",contact:"John Martin",email:"john@martinsupply.test",phone:"215-555-0128",rep:"Dad",stage:"Active",balance:3240,lifetimeSales:48620,billing:"1250 Market St, Philadelphia, PA 19107",delivery:"4800 Industrial Dr, Newark, NJ 07105",terms:"Net 30",notes:"Prefers email confirmations."},
-  {id:"c2",name:"North Point Labs",kind:"customer",contact:"Maria Chen",email:"maria@northpoint.test",phone:"973-555-0184",rep:"Dad",stage:"Active",balance:6480,lifetimeSales:72840,billing:"80 Broad St, Newark, NJ 07102",delivery:"4800 Industrial Dr, Newark, NJ 07105",terms:"Net 30",notes:"Call receiving 30 minutes ahead."},
-  {id:"c3",name:"Atlas Chemical",kind:"customer",contact:"Elena Ruiz",email:"elena@atlaschemical.test",phone:"410-555-0114",rep:"Sarah",stage:"Active",balance:0,lifetimeSales:36280,billing:"90 Harbor Way, Baltimore, MD 21224",delivery:"90 Harbor Way, Dock B",terms:"Net 30",notes:"Customer carrier."},
-  {id:"l1",name:"Hudson Labs",kind:"lead",contact:"Maria Chen",email:"maria@hudson.test",phone:"215-555-0184",rep:"Sarah",stage:"Follow up today",balance:0,lifetimeSales:0,billing:"",delivery:"",terms:"Net 30",notes:"Interested in 16 oz clear."},
-  {id:"l2",name:"Westfield Supply",kind:"lead",contact:"Tom Adams",email:"tom@westfield.test",phone:"",rep:"Dad",stage:"Quote sent",balance:0,lifetimeSales:0,billing:"",delivery:"",terms:"Net 30",notes:"Waiting for purchasing review."}
+  {id:"c1",name:"Miami Water Co",kind:"customer",contact:"Carlos Mendez",email:"carlos@miamiwater.test",phone:"(305) 555-0142",rep:"Dad",stage:"Active",balance:0,lifetimeSales:27600,billing:"8200 NW 30th St, Doral FL 33122",delivery:"8200 NW 30th St, Doral FL 33122",terms:"Net 30",notes:"Price $9.40 on 5-gal (agreed Jan 2026). Call the day before delivery.",prices:{"5-Gallon Bottle · 2 caps":9.4},qb:true},
+  {id:"c2",name:"Sunshine Coolers",kind:"customer",contact:"Dana Whitfield",email:"dana@sunshinecoolers.test",phone:"(954) 555-0198",rep:"Dad",stage:"Active",balance:850,lifetimeSales:6420,billing:"1450 SW 12th Ave, Pompano Beach FL 33069",delivery:"Picks up",terms:"Card on pickup",notes:"Pays by card on pickup. White van.",prices:{},qb:true},
+  {id:"c3",name:"Palm Aqua Delivery",kind:"customer",contact:"Ray Ortiz",email:"ray@palmaqua.test",phone:"(305) 555-0177",rep:"Dad",stage:"Active",balance:10243,lifetimeSales:88400,billing:"2300 NW 82nd Ave, Doral FL 33122",delivery:"2300 NW 82nd Ave, Doral FL 33122",terms:"Net 30",notes:"Biggest account. Ray texts, does not email.",prices:{"5-Gallon Bottle · 2 caps":9.25,"5-Gallon Bottle · no cap":8.2},qb:true},
+  {id:"l1",name:"Bay Harbor Market",kind:"lead",contact:"Ana Ruiz",email:"ana@bayharbormarket.test",phone:"(786) 555-0121",rep:"Dad",stage:"Quote requested",balance:0,lifetimeSales:0,billing:"9700 Bay Harbor Ter, Bay Harbor Islands FL 33154",delivery:"",terms:"Due on receipt",notes:"New. Asked for a price on 300 five-gallon.",prices:{},qb:false},
  ],
  documents:[
-  {id:"Q-108",kind:"quote",customerId:"c1",item:"16 oz Clear",cases:72,rate:54,discount:5,shipping:486,status:"Draft",due:"Sep 8",paid:0},
-  {id:"Q-107",kind:"quote",customerId:"l1",item:"12 oz Amber",cases:140,rate:62,discount:0,shipping:260,status:"Sent",due:"Sep 6",paid:0},
-  {id:"INV-392",kind:"invoice",customerId:"c1",item:"32 oz Handleware",cases:12,rate:255,discount:0,shipping:180,status:"Overdue",due:"Aug 20",paid:0},
-  {id:"INV-391",kind:"invoice",customerId:"c2",item:"12 oz Amber",cases:96,rate:62,discount:0,shipping:528,status:"Due Friday",due:"Sep 4",paid:0},
-  {id:"INV-390",kind:"invoice",customerId:"c3",item:"16 oz Clear",cases:40,rate:54,discount:0,shipping:0,status:"Paid",due:"Sep 1",paid:2160}
+  {id:"INV-1042",kind:"invoice",customerId:"c3",item:"5-Gallon Bottle · no cap",cases:250,quantity:500,rate:8.2,discount:0,shipping:312,status:"Sent",due:label(30),paid:0,qbSynced:true},
+  {id:"INV-1031",kind:"invoice",customerId:"c1",orderId:"SO-1190",item:"5-Gallon Bottle · 2 caps",cases:150,quantity:300,rate:9.4,discount:0,shipping:45,status:"Paid",due:label(-10),paid:2865,qbSynced:true},
+  {id:"INV-1027",kind:"invoice",customerId:"c3",orderId:"SO-1191",item:"5-Gallon Bottle · no cap + 5-Gallon Bottle · 2 caps",cases:350,quantity:700,rate:8.5,discount:2,shipping:312,status:"Due soon",due:label(2),paid:0,qbSynced:true},
+  {id:"INV-1019",kind:"invoice",customerId:"c2",item:"3-Gallon Bottle · 2 caps",cases:50,quantity:100,rate:8.5,discount:0,shipping:0,status:"Overdue",due:label(-10),paid:0,qbSynced:true},
+  {id:"Q-2040",kind:"quote",customerId:"l1",item:"5-Gallon Bottle · 2 caps",cases:150,quantity:300,rate:9.4,discount:0,shipping:45,status:"Draft",due:label(30),paid:0},
  ],
  orders:[
-  {id:"#2051",customerId:"c3",item:"16 oz Clear",cases:8,quantity:2000,due:"Today",status:"Ready",payment:"Paid"},
-  {id:"#2050",customerId:"c2",item:"12 oz Amber",cases:24,quantity:6000,due:"Friday",status:"In production",payment:"$6,480 due"},
-  {id:"#2049",customerId:"c1",item:"32 oz Handleware",cases:12,quantity:3000,due:"Sep 8",status:"Confirmed",payment:"$3,240 overdue"}
+  {id:"SO-1187",customerId:"c3",item:"5-Gallon Bottle · no cap",cases:250,quantity:500,due:label(0),status:"Ready",payment:"Net 30",lines:[{item:"5-Gallon Bottle · no cap",quantity:500,rate:8.2}],shipMethod:"ltl",shipping:312,discount:0,notes:"Ray wants the pallet double-wrapped.",stage:3,rep:"Dad"},
+  {id:"SO-1188",customerId:"c2",item:"3-Gallon Bottle · 2 caps",cases:60,quantity:120,due:label(0),status:"Quality check",payment:"Card on pickup",lines:[{item:"3-Gallon Bottle · 2 caps",quantity:120,rate:8.5}],shipMethod:"pickup",shipping:0,discount:0,notes:"",stage:2,rep:"Dad"},
+  {id:"SO-1189",customerId:"c1",item:"5-Gallon Bottle · 2 caps",cases:150,quantity:300,due:label(2),status:"In production",payment:"Net 30",lines:[{item:"5-Gallon Bottle · 2 caps",quantity:300,rate:9.4}],shipMethod:"truck",shipping:45,discount:0,notes:"Call Carlos the day before.",stage:1,rep:"Dad"},
+  {id:"SO-1190",customerId:"c1",item:"5-Gallon Bottle · 2 caps",cases:150,quantity:300,due:label(-11),status:"Paid",payment:"Paid",lines:[{item:"5-Gallon Bottle · 2 caps",quantity:300,rate:9.4}],shipMethod:"truck",shipping:45,discount:0,stage:6,invoiceId:"INV-1031",rep:"Dad"},
+  {id:"SO-1191",customerId:"c3",item:"5-Gallon Bottle · no cap",cases:350,quantity:700,due:label(-28),status:"Invoiced",payment:"$5,831 due",lines:[{item:"5-Gallon Bottle · no cap",quantity:500,rate:8.2},{item:"5-Gallon Bottle · 2 caps",quantity:200,rate:9.25}],shipMethod:"ltl",shipping:312,discount:2,stage:5,invoiceId:"INV-1027",rep:"Dad"},
  ],
  workOrders:[
-  {id:"WO-1048",orderId:"#2050",item:"12 oz Amber",quantity:6000,good:1250,scrap:18,packed:0,date:"2026-09-01",status:"Running",purpose:"North Point Labs order"},
-  {id:"WO-1049",item:"16 oz Clear",quantity:4000,good:0,scrap:0,packed:0,date:"2026-09-02",status:"Scheduled",purpose:"Build in-house stock"}
+  {id:"WO-116",orderId:"SO-1187",item:"5-Gallon Bottle · no cap",quantity:500,good:500,scrap:11,packed:500,date:iso(0),status:"Done",purpose:"Palm Aqua Delivery order",line:"Line 1",days:1,qcResult:"pass"},
+  {id:"WO-115",orderId:"SO-1188",item:"3-Gallon Bottle · 2 caps",quantity:120,good:120,scrap:3,packed:0,date:iso(0),status:"QC hold",purpose:"Sunshine Coolers order",line:"Line 2",days:1,qc:DEFAULT_QC.map(l=>({label:l,result:null})),qcResult:null},
+  {id:"WO-118",orderId:"SO-1189",item:"5-Gallon Bottle · 2 caps",quantity:600,good:418,scrap:9,packed:0,date:iso(1),status:"Running",purpose:"Miami Water Co order + stock",line:"Line 1",days:2,qc:DEFAULT_QC.map((l,i)=>({label:l,result:[true,true,null,true,true,null][i]})),qcNote:"Base looked a touch soft on rack 3 — Luis trimmed lamp zone 5 by 3%."},
+  {id:"WO-119",item:"3-Gallon Bottle · 2 caps",quantity:500,good:0,scrap:0,packed:0,date:iso(2),status:"Scheduled",purpose:"Build stock",line:"Line 2",days:2},
+  {id:"WO-120",item:"5-Gallon Bottle · no cap",quantity:400,good:0,scrap:0,packed:0,date:iso(3),status:"Scheduled",purpose:"Build stock",line:"Line 1",days:1},
  ],
- calendar:[{id:"ev1",day:1,type:"order",title:"WO-1048 · North Point"},{id:"ev2",day:2,type:"stock",title:"WO-1049 · Build stock"},{id:"ev3",day:3,type:"maintenance",title:"Line 1 service"},{id:"ev4",day:4,type:"delivery",title:"Resin delivery"},{id:"ev5",day:8,type:"order",title:"#2049 · Martin Supply"},{id:"ev6",day:29,type:"maintenance",title:"Month-end inventory"}],
- notices:[{id:"n1",title:"Payment received",detail:"Atlas Chemical paid INV-390 · $2,160",urgent:false,read:false,createdAt:"Today · 1:32 PM",target:"Invoices"},{id:"n2",title:"Production updated",detail:"Warehouse reported 1,250 good bottles on WO-1048",urgent:false,read:false,createdAt:"Today · 1:18 PM",target:"Work orders"},{id:"n3",title:"Order ready",detail:"Order #2051 is ready to pack",urgent:true,read:false,createdAt:"Today · 12:45 PM",target:"Orders"}],
- activities:[{id:"a1",customerId:"c2",title:"Production update",detail:"Order #2050 reached 21% completion",actor:"Warehouse",createdAt:"Today · 1:18 PM"},{id:"a2",customerId:"c3",title:"Payment received",detail:"INV-390 paid in full",actor:"System",createdAt:"Today · 1:32 PM"}],
- roles:[{id:"r1",name:"Owner",members:["Christopher"],permissions:{all:"edit"}},{id:"r2",name:"Sales representatives",members:["Dad","Sarah"],permissions:{crm:"edit",sales:"edit",calendar:"view",financials:"none",operations:"view",settings:"none"}},{id:"r3",name:"Warehouse production",members:["Warehouse"],permissions:{crm:"none",sales:"view",calendar:"view",financials:"none",operations:"edit",settings:"none"}}],
- itemRates:[{id:"i1",item:"16 oz Clear",rate:54,minimum:4,discountLimit:8},{id:"i2",item:"12 oz Amber",rate:62,minimum:4,discountLimit:8},{id:"i3",item:"32 oz Handleware",rate:255,minimum:2,discountLimit:5}],
- inventory:[{id:"s1",item:"Clear preforms",onHand:18400,committed:6000,reorder:5000,cost:.18},{id:"s2",item:"Blue caps",onHand:8400,committed:6000,reorder:10000,cost:.08},{id:"s3",item:"16 oz Clear bottles",onHand:4500,committed:2000,reorder:2000,cost:.42}],
- settings:{company:"Pure Alkaline LLC",ownerName:"Christopher Granitz",ownerEmail:"christopher@purealkaline.test",warehouseToken:"floor-7Q4M-2026",quickBooks:{connected:false,realmId:"",lastSync:"Never",customers:true,invoices:true,quotes:true,conflicts:0}}
+ calendar:[],
+ notices:[
+  {id:"n1",title:"Order ready to ship",detail:"SO-1187 Palm Aqua Delivery · pack it, freight pickup 2 pm",urgent:true,read:false,createdAt:"Today · 12:45 PM",target:"Orders"},
+  {id:"n2",title:"Production updated",detail:"WO-118 · 418 good bottles so far, 2.1% scrap",urgent:false,read:false,createdAt:"Today · 1:18 PM",target:"Work orders"},
+  {id:"n3",title:"Quality hold",detail:"WO-115 finished — 6 checks waiting before Sunshine Coolers can pick up",urgent:true,read:false,createdAt:"Today · 11:02 AM",target:"Quality"},
+ ],
+ activities:[
+  {id:"a1",customerId:"c3",title:"Ready",detail:"SO-1187 passed quality — ready to pack",actor:"Warehouse",createdAt:"Today · 12:45 PM"},
+  {id:"a2",customerId:"c1",title:"Production update",detail:"WO-118 at 418 of 600",actor:"Warehouse",createdAt:"Today · 1:18 PM"},
+ ],
+ roles:[
+  {id:"r1",name:"Owner",members:["Christopher"],permissions:{all:"edit"}},
+  {id:"r2",name:"Sales",members:["Dad"],permissions:{crm:"edit",sales:"edit",calendar:"view",financials:"none",operations:"view",settings:"none"}},
+  {id:"r3",name:"Warehouse",members:["Luis"],permissions:{crm:"none",sales:"view",calendar:"view",financials:"none",operations:"edit",settings:"none"}},
+ ],
+ itemRates:[
+  {id:"i1",item:"5-Gallon Bottle · 2 caps",sub:"with 2 screw caps",rate:9.9,floor:8.75,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.85,material:"PET preforms · 780g (5-gal)",qcChecks:["Weight (780g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
+  {id:"i2",item:"3-Gallon Bottle · 2 caps",sub:"with 2 screw caps",rate:8.5,floor:7.6,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.1,material:"PET preforms · 560g (3-gal)",qcChecks:["Weight (560g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
+  {id:"i3",item:"5-Gallon Bottle · no cap",sub:"no cap",rate:8.6,floor:7.7,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.4,material:"PET preforms · 780g (5-gal)",qcChecks:["Weight (780g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
+  {id:"i4",item:"Screw Caps · 10-pack",sub:"pack of 10",rate:3.2,floor:2.4,minimum:10,discountLimit:10,unitsPerCase:20,kind:"finished",cost:0.61,material:"55mm screw caps (bulk)",qcChecks:["Thread fit on 55mm neck","Liner seated","Visual · flash / short shots"]},
+  {id:"i5",item:"Silicone Caps · 3-pack",sub:"pack of 3",rate:4.99,floor:3.8,minimum:10,discountLimit:10,unitsPerCase:30,kind:"finished",cost:1.15,material:"Silicone caps (bulk)",qcChecks:["Seal test on 55mm neck","Visual · tears / voids"]},
+ ],
+ inventory:[
+  {id:"s1",item:"5-Gallon Bottle · 2 caps",kind:"finished",onHand:412,committed:300,reorder:250,cost:4.85,unit:"bottles"},
+  {id:"s2",item:"3-Gallon Bottle · 2 caps",kind:"finished",onHand:96,committed:120,reorder:200,cost:4.1,unit:"bottles"},
+  {id:"s3",item:"5-Gallon Bottle · no cap",kind:"finished",onHand:830,committed:500,reorder:250,cost:4.4,unit:"bottles"},
+  {id:"s4",item:"Screw Caps · 10-pack",kind:"finished",onHand:2140,committed:0,reorder:1000,cost:0.61,unit:"packs"},
+  {id:"s5",item:"Silicone Caps · 3-pack",kind:"finished",onHand:18,committed:0,reorder:100,cost:1.15,unit:"packs"},
+  {id:"r1",item:"PET preforms · 780g (5-gal)",kind:"raw",onHand:6200,committed:0,reorder:4000,cost:1.92,unit:"pcs",usage:"~1,200/day"},
+  {id:"r2",item:"PET preforms · 560g (3-gal)",kind:"raw",onHand:1450,committed:0,reorder:2000,cost:1.48,unit:"pcs",onOrder:8000,eta:label(7),usage:"~900/day"},
+  {id:"r3",item:"55mm screw caps (bulk)",kind:"raw",onHand:31000,committed:0,reorder:15000,cost:0.061,unit:"pcs",usage:"~2,500/day"},
+  {id:"r4",item:"Silicone caps (bulk)",kind:"raw",onHand:54,committed:0,reorder:600,cost:0.38,unit:"pcs",onOrder:1500,eta:label(10)+" (sea)",usage:"~120/day"},
+  {id:"r5",item:"Handles · blue",kind:"raw",onHand:2900,committed:0,reorder:1500,cost:0.14,unit:"pcs",usage:"~1,200/day"},
+  {id:"r6",item:"Cartons 18×18×10",kind:"raw",onHand:410,committed:0,reorder:300,cost:1.1,unit:"pcs",onOrder:600,eta:label(2),usage:"~60/day"},
+ ],
+ settings:{company:"EcoForm Bottles",ownerName:"Christopher Granitz",ownerEmail:"chris@ecoformbottles.test",warehouseToken:"floor-7Q4M-2026",lines:["Line 1","Line 2"],shipMethods:DEFAULT_SHIP,discountApproval:5,
+  quickBooks:{connected:true,realmId:"9130-EF",lastSync:"4 min ago",customers:true,invoices:true,quotes:true,conflicts:0}},
 };
 
+// ---- helpers ----
 export const documentTotal=(d:DocumentRecord)=>Math.round(((d.cases*d.rate)*(1-d.discount/100)+d.shipping)*100)/100;
+export const money=(n:number)=>"$"+n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+export const int=(n:number)=>Math.round(n).toLocaleString("en-US");
+// Orders saved by the earlier UI priced by the case; show them that way rather than re-pricing per bottle.
+export const orderLines=(o:OrderRecord,rates:ItemRate[]):OrderLine[]=>o.lines&&o.lines.length?o.lines:[{item:`${o.item} · case`,quantity:o.cases||o.quantity,rate:rates.find(r=>r.item===o.item)?.rate??0}];
+export function orderTotals(o:OrderRecord,data:AppData){const lines=orderLines(o,data.itemRates);const sub=lines.reduce((a,l)=>a+l.quantity*l.rate,0);const disc=sub*(o.discount||0)/100;const sm=(data.settings.shipMethods||DEFAULT_SHIP).find(s=>s.id===o.shipMethod);const cases=lines.reduce((a,l)=>a+Math.ceil(l.quantity/(data.itemRates.find(r=>r.item===l.item)?.unitsPerCase||2)),0);const ship=o.shipping!=null?o.shipping:sm?(sm.perCase?sm.perCase*cases:sm.rate):0;return {lines,sub,disc,ship,cases,total:Math.round((sub-disc+ship)*100)/100}}
+export const stageOf=(o:OrderRecord)=>o.stage!=null?o.stage:Math.max(0,STAGES.findIndex(s=>s.toLowerCase()===o.status.toLowerCase()));
+export const freeStock=(row:InventoryRow)=>row.onHand-row.committed;
+export const fmtDay=(d:Date)=>d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
+
+/** Fill in fields the old UI never saved so the new screens always have what they need. */
+export function normalize(d:AppData):AppData{
+  const s=d.settings||seedData.settings;
+  return {...d,
+    customers:(d.customers||[]).map(c=>({...c,prices:c.prices||{},qb:c.qb??true})),
+    orders:(d.orders||[]).map(o=>({...o,stage:stageOf(o),discount:o.discount||0,shipMethod:o.shipMethod||"pickup",notes:o.notes||""})),
+    workOrders:(d.workOrders||[]).map(w=>({...w,line:w.line||"Line 1",days:w.days||1})),
+    itemRates:(d.itemRates||[]).map(r=>({...r,kind:r.kind||"finished",unitsPerCase:r.unitsPerCase||2,floor:r.floor??Math.round(r.rate*(1-r.discountLimit/100)*100)/100,qcChecks:r.qcChecks||DEFAULT_QC})),
+    inventory:(d.inventory||[]).map(i=>({...i,kind:i.kind||(/(preform|cap \(|caps \(|handle|carton|resin)/i.test(i.item)?"raw":"finished")})),
+    calendar:d.calendar||[],notices:d.notices||[],activities:d.activities||[],roles:d.roles||seedData.roles,documents:d.documents||[],
+    settings:{...seedData.settings,...s,lines:s.lines||["Line 1","Line 2"],shipMethods:s.shipMethods||DEFAULT_SHIP,discountApproval:s.discountApproval??5,quickBooks:{...seedData.settings.quickBooks,...(s.quickBooks||{})}}};
+}

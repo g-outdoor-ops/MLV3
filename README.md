@@ -1,4 +1,31 @@
-# vinext-starter
+# MakeLogic v3 — EcoForm
+
+Orders, production, quality, inventory and money for EcoForm Bottles, simple enough for anyone on the team.
+
+## Who sees what
+
+- **Sales** (`/#sales`) — four big buttons: New Order, Check Stock, Customers, Make a Quote. Orders are a five-step guided flow (Who → What → When → Shipping & price → Check) with shipping method, discount, a note for the warehouse and a note for the invoice. Each order has a status pipeline (Placed → In production → Quality check → Ready → Shipped → Invoiced → Paid) and, once shipped, one button to create the invoice in QuickBooks and send a payment link.
+- **Owner** (`/#owner/today`) — Today (what needs you, sorted by urgency), Orders (board by stage), Work orders, Schedule (week grid per line), Inventory (finished goods and raw materials with reorder points), Quality (pass/fail checklist per run → release to stock, hold, or scrap), Money (invoices, payments, quotes), Settings (prices and floors, shipping rates, QuickBooks, people, starter data).
+- **Floor** (`/#warehouse`, tablet) — the production screen: +24 good (one rack), +1 scrap, add any amount by racks or bottles, pause / problem, undo, quality note, finish run → quality checks. Pack orders tab: mark packed, mark shipped. Second line at `/#warehouse/line/Line%202`.
+
+Everything each role does updates the others: placing an order that exceeds free stock creates a work order for the owner's schedule; finishing a run on the floor puts it in Quality; passing quality moves stock and the order to Ready; shipping from the floor unlocks the invoice for sales.
+
+## Code layout
+
+- `app/app-data.ts` — the company data model, EcoForm starter data, `normalize()` (fills defaults so data saved by the earlier UI still loads), money/stock helpers.
+- `app/page.tsx` — shell: hash routing, load/save through `/api/state`, header, notifications, toasts.
+- `app/components/ui.tsx` — icons, pills, notes, the store context.
+- `app/components/sales.tsx` — Home, order/quote wizard, order detail (shared with the owner), stock check, customers.
+- `app/components/owner.tsx` — the owner tabs.
+- `app/components/floor.tsx` — the floor tablet.
+- `app/works.css` — the whole design system (warm off-white, forest green, Archivo, 18px minimum text, 44px+ targets).
+- `app/api/state/route.ts` — one JSON document + audit log in Postgres (Render) or D1 (Cloudflare).
+
+Existing deployments keep their saved data. To switch a database still holding the old Pure Alkaline test records to the EcoForm starter data, use **Owner → Settings → Load EcoForm starter data**.
+
+---
+
+## Starter notes (vinext)
 
 A clean full-stack starter running on
 [vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and

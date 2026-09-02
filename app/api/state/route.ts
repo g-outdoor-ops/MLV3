@@ -7,7 +7,7 @@ const d1AuditSchema=`CREATE TABLE IF NOT EXISTS audit_events (id INTEGER PRIMARY
 
 let postgresPool:import("pg").Pool|undefined;
 
-async function usePostgres(){
+async function getPostgres(){
   const url=process.env.DATABASE_URL;
   if(!url)return null;
   const{Pool}=await import("pg");
@@ -20,7 +20,7 @@ async function usePostgres(){
 }
 
 async function readState():Promise<StateRow>{
-  const pg=await usePostgres();
+  const pg=await getPostgres();
   if(pg){const result=await pg.query<StateRow>("SELECT payload,version,updated_at FROM app_state WHERE id='company'");return result.rows[0]}
   const{env}=await import("cloudflare:workers");
   await env.DB.batch([env.DB.prepare(stateSchema),env.DB.prepare(d1AuditSchema)]);
@@ -30,7 +30,7 @@ async function readState():Promise<StateRow>{
 }
 
 async function writeState(data:AppData,actor:string,action:string,summary:string){
-  const now=new Date().toISOString();const pg=await usePostgres();
+  const now=new Date().toISOString();const pg=await getPostgres();
   if(pg){const client=await pg.connect();try{await client.query("BEGIN");await client.query("UPDATE app_state SET payload=$1,version=version+1,updated_at=$2,updated_by=$3 WHERE id='company'",[JSON.stringify(data),now,actor]);await client.query("INSERT INTO audit_events(actor,action,summary,created_at) VALUES($1,$2,$3,$4)",[actor,action,summary,now]);await client.query("COMMIT")}catch(error){await client.query("ROLLBACK");throw error}finally{client.release()}return now}
   const{env}=await import("cloudflare:workers");await readState();await env.DB.batch([env.DB.prepare("UPDATE app_state SET payload=?,version=version+1,updated_at=?,updated_by=? WHERE id='company'").bind(JSON.stringify(data),now,actor),env.DB.prepare("INSERT INTO audit_events(actor,action,summary,created_at) VALUES(?,?,?,?)").bind(actor,action,summary,now)]);return now;
 }

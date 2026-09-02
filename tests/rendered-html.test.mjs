@@ -34,8 +34,9 @@ test("durable company state and audit logging are configured",async()=>{
 });
 
 test("connected business workflows are present",async()=>{
-  const page=await readFile(new URL("app/page.tsx",root),"utf8");
-  for(const marker of ["quote.convert","invoice.payment","production.report","packing.complete","calendar.move","roles.update","settings.quickbooks","Export company report"]){
-    assert.ok(page.includes(marker),marker);
+  const files=await Promise.all(["app/components/sales.tsx","app/components/owner.tsx","app/components/floor.tsx"].map(f=>readFile(new URL(f,root),"utf8")));
+  const source=files.join("\n");
+  for(const marker of ["order.create","quote.create","invoice.create","payment.record","production.report","production.finish","packing.complete","order.ship","wo.move","wo.release","qc.pass","purchase.create","Create invoice in QuickBooks"]){
+    assert.ok(source.includes(marker),marker);
   }
 });
