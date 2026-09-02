@@ -14,6 +14,7 @@ import "./operations-workspaces.css";
 import "./accounts-roles.css";
 import "./warehouse-link.css";
 import "./clickthroughs.css";
+import "./crm.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
