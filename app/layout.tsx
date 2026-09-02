@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import "./extras.css";
@@ -16,6 +17,7 @@ import "./warehouse-link.css";
 import "./clickthroughs.css";
 import "./crm.css";
 import "./customer-tabs.css";
+import "./connected-workflows.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -27,14 +29,10 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
-  title: "MakeLogic V2 Test",
-  description: "A simple role-based manufacturing operations prototype.",
-  icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
-  },
-};
+export async function generateMetadata():Promise<Metadata>{
+  const h=await headers();const host=h.get("x-forwarded-host")||h.get("host")||"localhost:3001";const protocol=h.get("x-forwarded-proto")||(host.startsWith("localhost")?"http":"https");const image=`${protocol}://${host}/og.png`;const title="MakeLogic — Manufacturing control from sale to shipment";const description="A simple company control center for customers, quotes, orders, production, warehouse work, inventory, and financial reporting.";
+  return {title,description,icons:{icon:"/favicon.svg",shortcut:"/favicon.svg"},openGraph:{title,description,images:[image]},twitter:{card:"summary_large_image",title,description,images:[image]}};
+}
 
 export default function RootLayout({
   children,
