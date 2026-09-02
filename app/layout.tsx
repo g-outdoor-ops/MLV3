@@ -12,6 +12,7 @@ import "./month-calendar.css";
 import "./calendar-legend-fix.css";
 import "./operations-workspaces.css";
 import "./accounts-roles.css";
+import "./warehouse-link.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
