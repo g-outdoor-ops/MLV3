@@ -2,18 +2,19 @@
 import { useState } from "react";
 import { STAGES, documentTotal, orderTotals, stageOf, type WorkOrder } from "../app-data";
 import { Kpi, MiniRow, MoneyRow, initials, num, useApp, usd, usd2, type Modal } from "./store";
+import { authCall } from "./auth";
 
 export const salesNav=["Dashboard","Leads","Customers","Quotes","Invoices","Orders","Production calendar","My account"];
 
 export function SalesView({nav}:{nav:string}){
-  const {setModal,role,data}=useApp();
+  const {setModal,role}=useApp();
   if(nav==="Leads")return <Leads/>;
   if(nav==="Customers")return <Customers/>;
   if(nav==="Quotes")return <DocList kind="quote"/>;
   if(nav==="Invoices")return <DocList kind="invoice"/>;
   if(nav==="Orders")return <OrdersPage/>;
   if(nav==="Production calendar")return <ProductionCalendar audience={role==="owner"?"owner":"sales"}/>;
-  if(nav==="My account")return <MyAccount title="Sales representative" name={data.roles.find(r=>/sales/i.test(r.name))?.members[0]||"Sales"} email=""/>;
+  if(nav==="My account")return <MyAccount/>;
   return <SalesDashboard setModal={setModal}/>;
 }
 
@@ -88,8 +89,8 @@ export function ProductionCalendar({audience}:{audience:"sales"|"owner"}){
     <div className="calendar-legend"><span><i className="order"/>Customer order</span><span><i className="stock"/>Build stock</span><span><i className="maintenance"/>Maintenance</span><span><i className="delivery"/>Inbound delivery</span></div></>;
 }
 
-export function MyAccount({title,name,email}:{title:string;name:string;email:string}){const{data,commit,notify}=useApp();const[n,setN]=useState(name);const[e,setE]=useState(email);const[passwordOpen,setPasswordOpen]=useState(false);
-  const save=()=>{commit(v=>({...v,roles:v.roles.map(r=>r.members.includes(name)?{...r,members:r.members.map(m=>m===name?n:m)}:r),customers:v.customers.map(c=>c.rep===name?{...c,rep:n}:c)}),"account.update",`${name} → ${n}`);notify("Profile changes saved","My account")};
-  return <><p className="eyebrow">Personal settings</p><h1>My account</h1><p className="intro">Update your own contact information and password.</p><div className="account-layout"><section className="panel account-card"><div className="account-heading"><div className="large-avatar">{initials(n||"?")}</div><div><h2>{n}</h2><p>{title}</p></div></div><div className="form-grid"><label>Full name<input value={n} onChange={ev=>setN(ev.target.value)}/></label><label>Email address<input type="email" value={e} onChange={ev=>setE(ev.target.value)}/></label></div><button className="primary" onClick={save}>Save profile changes</button></section><section className="panel account-card"><h2>Password & security</h2><p className="account-copy">Sign-in is handled by the hosting platform ({data.settings.company}). Password changes happen there.</p>{passwordOpen?<><label>Current password<input type="password"/></label><label>New password<input type="password"/></label><label>Confirm new password<input type="password"/></label><button className="primary full" onClick={()=>{setPasswordOpen(false);notify("Password change requested — check your email to confirm","My account")}}>Update password</button></>:<button className="secondary full" onClick={()=>setPasswordOpen(true)}>Change password</button>}</section></div></>;
+export function MyAccount(){const{authUser,signOut,notify,data}=useApp();const[cur,setCur]=useState("");const[pw,setPw]=useState("");const[pw2,setPw2]=useState("");const[open,setOpen]=useState(false);const[err,setErr]=useState("");
+  const change=async()=>{setErr("");if(pw.length<8)return setErr("New password needs at least 8 characters");if(pw!==pw2)return setErr("Passwords don't match");try{await authCall({op:"password",current:cur,password:pw});setOpen(false);setCur("");setPw("");setPw2("");notify("Password updated","My account")}catch(e){setErr(e instanceof Error?e.message:"Could not change password")}};
+  const roleName=authUser?.role==="owner"?"Owner":authUser?.role==="sales"?"Sales":"Warehouse";
+  return <><p className="eyebrow">Personal settings</p><h1>My account</h1><p className="intro">Your sign-in for {data.settings.company||"the company"}.</p><div className="account-layout"><section className="panel account-card"><div className="account-heading"><div className="large-avatar">{initials(authUser?.name||"?")}</div><div><h2>{authUser?.name}</h2><p>{roleName} · {authUser?.email}</p></div></div><p className="account-copy">Name and email are managed by the owner under Settings &amp; access.</p><button className="secondary" onClick={signOut}>Sign out</button></section><section className="panel account-card"><h2>Password &amp; security</h2><p className="account-copy">Use a password you don&apos;t use anywhere else.</p>{open?<><label>Current password<input type="password" value={cur} onChange={e=>setCur(e.target.value)} autoComplete="current-password"/></label><label>New password<input type="password" value={pw} onChange={e=>setPw(e.target.value)} autoComplete="new-password"/></label><label>Confirm new password<input type="password" value={pw2} onChange={e=>setPw2(e.target.value)} autoComplete="new-password"/></label>{err&&<p className="form-error">{err}</p>}<button className="primary full" onClick={change}>Update password</button></>:<button className="secondary full" onClick={()=>setOpen(true)}>Change password</button>}</section></div></>;
 }
-

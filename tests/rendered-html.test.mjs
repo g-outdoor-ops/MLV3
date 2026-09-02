@@ -34,9 +34,9 @@ test("durable company state and audit logging are configured",async()=>{
 });
 
 test("connected business workflows are present",async()=>{
-  const files=await Promise.all(["app/components/modals.tsx","app/components/drawers.tsx","app/components/owner.tsx","app/components/sales.tsx","app/components/floor.tsx"].map(f=>readFile(new URL(f,root),"utf8")));
+  const files=await Promise.all(["app/components/modals.tsx","app/components/drawers.tsx","app/components/owner.tsx","app/components/sales.tsx","app/components/floor.tsx","app/api/auth/route.ts","app/server/qbo.ts"].map(f=>readFile(new URL(f,root),"utf8")));
   const source=files.join("\n");
-  for(const marker of ["order.create","quote.approve","invoice.create","invoice.payment","order.ship","production.report","production.finish","packing.complete","calendar.move","qc.pass","purchase.create","purchase.receive","maintenance.complete","inventory.move","roles.update","settings.quickbooks","Export company report"]){
+  for(const marker of ["order.create","quote.approve","invoice.create","invoice.payment","order.ship","production.report","production.finish","packing.complete","calendar.move","qc.pass","purchase.create","purchase.receive","maintenance.complete","inventory.move","users.create","auth.setup","settings.quickbooks","qbo.invoice","qbo.payment","Export company report"]){
     assert.ok(source.includes(marker),marker);
   }
 });

@@ -3,8 +3,8 @@
 // New fields are optional and filled in by normalize() so data saved by the
 // previous UI keeps loading.
 
-export type Customer={id:string;name:string;kind:"customer"|"lead";contact:string;email:string;phone:string;rep:string;stage:string;balance:number;lifetimeSales:number;billing:string;delivery:string;terms:string;notes:string;prices?:Record<string,number>;qb?:boolean};
-export type DocumentRecord={id:string;kind:"quote"|"invoice";customerId:string;item:string;cases:number;rate:number;discount:number;shipping:number;status:string;due:string;paid:number;orderId?:string;quantity?:number;qbSynced?:boolean;note?:string};
+export type Customer={id:string;name:string;kind:"customer"|"lead";contact:string;email:string;phone:string;rep:string;stage:string;balance:number;lifetimeSales:number;billing:string;delivery:string;terms:string;notes:string;prices?:Record<string,number>;qb?:boolean;qboId?:string};
+export type DocumentRecord={id:string;kind:"quote"|"invoice";customerId:string;item:string;cases:number;rate:number;discount:number;shipping:number;status:string;due:string;paid:number;orderId?:string;quantity?:number;qbSynced?:boolean;note?:string;qboId?:string;qboDocNumber?:string;paymentQboId?:string};
 export type OrderLine={item:string;quantity:number;rate:number};
 export type OrderRecord={id:string;customerId:string;item:string;cases:number;quantity:number;due:string;status:string;payment:string;
   lines?:OrderLine[];shipMethod?:string;shipping?:number;discount?:number;notes?:string;invoiceNote?:string;stage?:number;invoiceId?:string;rep?:string;createdAt?:string};
@@ -16,7 +16,7 @@ export type Activity={id:string;customerId?:string;title:string;detail:string;ac
 export type RoleSetting={id:string;name:string;members:string[];permissions:Record<string,"none"|"view"|"edit">};
 export type ItemRate={id:string;item:string;rate:number;minimum:number;discountLimit:number;floor?:number;unitsPerCase?:number;kind?:"finished"|"raw";cost?:number;sub?:string;qcChecks?:string[];material?:string};
 export type InventoryRow={id:string;item:string;onHand:number;committed:number;reorder:number;cost:number;kind?:"finished"|"raw";unit?:string;onOrder?:number;eta?:string;usage?:string;supplier?:string};
-export type ShipMethod={id:string;name:string;sub:string;rate:number;perCase?:number};
+export type ShipMethod={id:string;name:string;sub:string;rate:number;perCase?:number;custom?:boolean};
 export type MaintenanceItem={id:string;machine:string;task:string;due:string;status:"Due"|"Scheduled"|"Complete";downtimeMin?:number;notes?:string};
 export type PurchaseOrder={id:string;supplier:string;item:string;quantity:number;unitCost:number;freight:number;duty:number;eta:string;status:"Open"|"Received"|"Cancelled";createdAt:string;receivedAt?:string};
 export type AppData={customers:Customer[];documents:DocumentRecord[];orders:OrderRecord[];workOrders:WorkOrder[];calendar:CalendarEvent[];notices:Notice[];activities:Activity[];roles:RoleSetting[];itemRates:ItemRate[];inventory:InventoryRow[];maintenance?:MaintenanceItem[];purchaseOrders?:PurchaseOrder[];
@@ -29,12 +29,20 @@ export const DEFAULT_SHIP:ShipMethod[]=[
   {id:"truck",name:"Our truck · local delivery",sub:"Miami-Dade & Broward, next business day",rate:45},
   {id:"ltl",name:"Freight (LTL) · palletized",sub:"Quote from carrier, 3–5 days",rate:312},
   {id:"ups",name:"UPS Ground · by the box",sub:"Small orders only, 1–4 days",rate:0,perCase:6.4},
+  {id:"custom",name:"Freight quote · enter the amount",sub:"LTL or carrier quote for this shipment",rate:0,custom:true},
 ];
 
 const today=new Date();const iso=(d:number)=>{const x=new Date(today);x.setDate(x.getDate()+d);return x.toISOString().slice(0,10)};
 const label=(d:number)=>{const x=new Date(today);x.setDate(x.getDate()+d);return x.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})};
 
 export const seedData:AppData={
+ customers:[],documents:[],orders:[],workOrders:[],calendar:[],notices:[],activities:[],
+ roles:[{id:"r1",name:"Owner",members:[],permissions:{all:"edit"}},{id:"r2",name:"Sales",members:[],permissions:{crm:"edit",sales:"edit",calendar:"view",financials:"none",operations:"view",settings:"none"}},{id:"r3",name:"Warehouse",members:[],permissions:{crm:"none",sales:"view",calendar:"view",financials:"none",operations:"edit",settings:"none"}}],
+ itemRates:[],inventory:[],maintenance:[],purchaseOrders:[],
+ settings:{company:"",ownerName:"",ownerEmail:"",warehouseToken:"",lines:["Line 1"],shipMethods:DEFAULT_SHIP,discountApproval:5,monthlyExpenses:0,cashOnHand:0,quickBooks:{connected:false,realmId:"",lastSync:"Never",customers:true,invoices:true,quotes:true,conflicts:0}},
+};
+
+export const demoData:AppData={
  customers:[
   {id:"c1",name:"Miami Water Co",kind:"customer",contact:"Carlos Mendez",email:"carlos@miamiwater.test",phone:"(305) 555-0142",rep:"Dad",stage:"Active",balance:0,lifetimeSales:27600,billing:"8200 NW 30th St, Doral FL 33122",delivery:"8200 NW 30th St, Doral FL 33122",terms:"Net 30",notes:"Price $9.40 on 5-gal (agreed Jan 2026). Call the day before delivery.",prices:{"5-Gallon Bottle · 2 caps":9.4},qb:true},
   {id:"c2",name:"Sunshine Coolers",kind:"customer",contact:"Dana Whitfield",email:"dana@sunshinecoolers.test",phone:"(954) 555-0198",rep:"Dad",stage:"Active",balance:850,lifetimeSales:6420,billing:"1450 SW 12th Ave, Pompano Beach FL 33069",delivery:"Picks up",terms:"Card on pickup",notes:"Pays by card on pickup. White van.",prices:{},qb:true},
@@ -113,7 +121,7 @@ export const seedData:AppData={
 };
 
 // ---- helpers ----
-export const documentTotal=(d:DocumentRecord)=>Math.round(((d.cases*d.rate)*(1-d.discount/100)+d.shipping)*100)/100;
+export const documentTotal=(d:DocumentRecord)=>Math.round((((d.quantity??d.cases)*d.rate)*(1-d.discount/100)+d.shipping)*100)/100;
 export const money=(n:number)=>"$"+n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 export const int=(n:number)=>Math.round(n).toLocaleString("en-US");
 // Orders saved by the earlier UI priced by the case; show them that way rather than re-pricing per bottle.
@@ -132,12 +140,12 @@ export function normalize(d:AppData):AppData{
     workOrders:(d.workOrders||[]).map(w=>({...w,line:w.line||"Line 1",days:w.days||1})),
     itemRates:(d.itemRates||[]).map(r=>({...r,kind:r.kind||"finished",unitsPerCase:r.unitsPerCase||2,floor:r.floor??Math.round(r.rate*(1-r.discountLimit/100)*100)/100,qcChecks:r.qcChecks||DEFAULT_QC})),
     inventory:(d.inventory||[]).map(i=>({...i,kind:i.kind||(/(preform|cap \(|caps \(|handle|carton|resin)/i.test(i.item)?"raw":"finished")})),
-    maintenance:d.maintenance||seedData.maintenance,purchaseOrders:d.purchaseOrders||[],
+    maintenance:d.maintenance||[],purchaseOrders:d.purchaseOrders||[],
     calendar:d.calendar||[],notices:d.notices||[],activities:d.activities||[],roles:d.roles||seedData.roles,documents:d.documents||[],
-    settings:{...seedData.settings,...s,lines:s.lines||["Line 1","Line 2"],shipMethods:s.shipMethods||DEFAULT_SHIP,discountApproval:s.discountApproval??5,monthlyExpenses:s.monthlyExpenses??6500,cashOnHand:s.cashOnHand??0,quickBooks:{...seedData.settings.quickBooks,...(s.quickBooks||{})}}};
+    settings:{...seedData.settings,...s,lines:s.lines||["Line 1"],shipMethods:(s.shipMethods&&s.shipMethods.some(m=>m.custom)?s.shipMethods:[...(s.shipMethods||DEFAULT_SHIP).filter(m=>!m.custom),DEFAULT_SHIP[DEFAULT_SHIP.length-1]]),discountApproval:s.discountApproval??5,monthlyExpenses:s.monthlyExpenses??0,cashOnHand:s.cashOnHand??0,quickBooks:{...seedData.settings.quickBooks,...(s.quickBooks||{})}}};
 }
 
-/** True when the saved record is still the original Pure Alkaline starter set. */
-export const isLegacySeed=(d:AppData)=>/pure alkaline/i.test(d.settings?.company||"")&&!d.itemRates.some(r=>/gallon/i.test(r.item));
+/** True when the record still holds sample customers (starter or demo data). */
+export const hasDemoData=(d:AppData)=>/pure alkaline/i.test(d.settings?.company||"")||d.customers.some(c=>/\.test$/i.test(c.email))||d.settings?.ownerEmail?.endsWith(".test")===true;
 export const todayIso=()=>new Date().toISOString().slice(0,10);
 export const daysFromNow=(n:number)=>{const x=new Date();x.setDate(x.getDate()+n);return x};

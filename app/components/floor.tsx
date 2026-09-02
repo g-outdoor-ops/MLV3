@@ -7,9 +7,9 @@ export const floorNav=["Production","Pack orders","My account"];
 const RACK=24;
 
 export function FloorView({nav,line,setLine}:{nav:string;line:string;setLine:(l:string)=>void}){
-  const {data,commit,notify,openRecord}=useApp();
+  const {data,commit,notify,openRecord,user}=useApp();
   const [unit,setUnit]=useState<"racks"|"bottles">("racks");const [amount,setAmount]=useState("1");const [hist,setHist]=useState<{k:"good"|"scrap";n:number}[]>([]);
-  const operator=data.roles.find(r=>/warehouse|floor/i.test(r.name))?.members[0]||"Warehouse";
+  const operator=user||"Warehouse";
   if(nav==="Pack orders")return <PackOrders operator={operator}/>;
   const lines=data.settings.lines||["Line 1"];
   const lineWOs=data.workOrders.filter(w=>w.line===line&&w.status!=="Done");

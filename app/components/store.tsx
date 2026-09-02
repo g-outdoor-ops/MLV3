@@ -14,6 +14,8 @@ export type AppContextValue={
   notify:(text:string,target?:string,urgent?:boolean)=>void;
   role:Role;
   user:string;
+  authUser:{id:string;email:string;name:string;role:Role}|null;
+  signOut:()=>Promise<void>;
 };
 export const AppContext=createContext<AppContextValue|null>(null);
 export const useApp=()=>{const v=useContext(AppContext);if(!v)throw new Error("MakeLogic data context unavailable");return v};

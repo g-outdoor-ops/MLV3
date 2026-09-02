@@ -7,54 +7,53 @@ import { OwnerView, ownerGroups } from "./components/owner";
 import { FloorView, floorNav } from "./components/floor";
 import { ModalHost } from "./components/modals";
 import { CustomerProfileDrawer, NotificationCenter, RecordDrawer } from "./components/drawers";
-
-const initialRole=():Role=>{if(typeof window==="undefined")return "sales";const h=window.location.hash;return h==="#warehouse"?"floor":h==="#owner"?"owner":"sales"};
+import { SignIn, authCall, type AuthUser } from "./components/auth";
 
 export default function Home(){
+  const mounted=useSyncExternalStore(()=>()=>{},()=>true,()=>false);
+  const[auth,setAuth]=useState<{user:AuthUser|null;needsSetup:boolean;checked:boolean}>({user:null,needsSetup:false,checked:false});
   const[data,setData]=useState<AppData>(()=>normalize(seedData));
   const[loaded,setLoaded]=useState(false);
-  const[roleState,setRole]=useState<Role>(initialRole);
-  const[navState,setNav]=useState(()=>{const r=initialRole();return r==="floor"?"Production":r==="owner"?"Control center":"Dashboard"});
+  const[nav,setNav]=useState("");
   const[modal,setModalState]=useState<{type:Modal;arg?:string}>({type:null});
   const[toast,setToast]=useState("");
   const[notificationsOpen,setNotificationsOpen]=useState(false);
   const[record,setRecord]=useState("");
   const[customerId,setCustomerId]=useState("");
   const[line,setLine]=useState("");
-  // Dates, clocks and the URL hash differ between server and browser, so the workspace renders after mount.
-  const mounted=useSyncExternalStore(()=>()=>{},()=>true,()=>false);
-  const role:Role=mounted?roleState:"sales";const nav=mounted?navState:"Dashboard";
-  const[floorKey]=useState(()=>typeof window==="undefined"?null:(window.location.hash==="#warehouse"?new URLSearchParams(window.location.search).get("floor"):null));
 
-  useEffect(()=>{fetch("/api/state").then(r=>r.ok?r.json():Promise.reject()).then(x=>setData(normalize(x.data))).catch(()=>setToast("Working offline — changes will retry")).finally(()=>setLoaded(true))},[]);
-  useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(""),3200);return()=>clearTimeout(t)},[toast]);
-  // The warehouse link carries ?floor=<key>; a tablet that opened with a stale key is turned away once records load.
-  const floorKeyOk=!loaded||floorKey===null||floorKey===data.settings.warehouseToken;
+  useEffect(()=>{fetch("/api/auth").then(r=>r.json()).then(j=>setAuth({user:j.user||null,needsSetup:!!j.needsSetup,checked:true})).catch(()=>setAuth({user:null,needsSetup:false,checked:true}))},[]);
+  useEffect(()=>{if(!auth.user)return;let live=true;Promise.resolve().then(()=>{if(live)setLoaded(false)});fetch("/api/state").then(r=>r.ok?r.json():Promise.reject()).then(x=>setData(normalize(x.data))).catch(()=>setToast("Working offline — changes will retry")).finally(()=>{if(live)setLoaded(true)});
+    const m=new URLSearchParams(window.location.search).get("qbo");if(m){Promise.resolve().then(()=>{if(live)setToast(m==="connected"?"QuickBooks connected":`QuickBooks: ${m}`)});history.replaceState(null,"",window.location.pathname+window.location.hash)}return()=>{live=false}},[auth.user]);
+  useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(""),3600);return()=>clearTimeout(t)},[toast]);
 
-  const commit=useCallback<AppContextValue["commit"]>((next,action="update",summary="Company data updated")=>{setData(current=>{const resolved=normalize(next(current));fetch("/api/state",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({data:resolved,action,summary,actor:role})}).catch(()=>setToast("Could not save yet — please try again"));return resolved})},[role]);
+  const role:Role=auth.user?.role||"sales";
+  const home=role==="owner"?"Control center":role==="floor"?"Production":"Dashboard";
+  const currentNav=nav||home;
+  const commit=useCallback<AppContextValue["commit"]>((next,action="update",summary="Company data updated")=>{setData(current=>{const resolved=normalize(next(current));fetch("/api/state",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({data:resolved,action,summary})}).then(r=>{if(r.status===401){setToast("Your session ended — please sign in again");setAuth(a=>({...a,user:null}))}else if(!r.ok)setToast("Could not save yet — please try again")}).catch(()=>setToast("Could not save yet — please try again"));return resolved})},[]);
   const notify=useCallback((text:string,target="Control center",urgent=false)=>{setToast(text);commit(current=>({...current,notices:[{id:`n${Date.now()}`,title:text.split(" — ")[0],detail:text,urgent,read:false,createdAt:"Today · "+new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}),target},...current.notices].slice(0,200)}),"notification",text)},[commit]);
-  const changeRole=(next:Role)=>{setRole(next);setNav(next==="sales"?"Dashboard":next==="owner"?"Control center":"Production");history.replaceState(null,"",`#${next==="floor"?"warehouse":next==="owner"?"owner":"sales"}`)};
   const setModal=(type:Modal,arg?:string)=>setModalState({type,arg});
-  const user=role==="owner"?data.settings.ownerName.split(" ")[0]:role==="sales"?(data.roles.find(r=>/sales/i.test(r.name))?.members[0]||"Sales"):(data.roles.find(r=>/warehouse|floor/i.test(r.name))?.members[0]||"Warehouse");
   const goNav=(v:string)=>{setNav(v);window.scrollTo(0,0)};
-  const context:AppContextValue={data,commit,setNav:goNav,setModal,openRecord:setRecord,openCustomer:setCustomerId,notify,role,user};
+  const signOut=async()=>{try{await authCall({op:"logout"})}catch{/* already out */}setAuth(a=>({...a,user:null}));setNav("");setData(normalize(seedData))};
+  const user=auth.user?.name||"";
+  const context:AppContextValue={data,commit,setNav:goNav,setModal,openRecord:setRecord,openCustomer:setCustomerId,notify,role,user,authUser:auth.user,signOut};
   const unread=data.notices.filter(n=>!n.read).length;
   const customer=data.customers.find(c=>c.id===customerId);
   const currentLine=line||(data.settings.lines||["Line 1"])[0];
 
-  if(!floorKeyOk)return <main className="floor-shell"><div className="floor-heading" style={{padding:40}}><div><p className="eyebrow">Warehouse floor</p><h1>This link is no longer valid</h1><p>The warehouse key was rotated. Ask the owner for the new link (Settings &amp; access → Copy warehouse link).</p></div></div></main>;
+  if(!mounted||!auth.checked)return <main className="app-shell"><header className="topbar"><div className="logo">Make<span>Logic</span></div></header><p className="intro" style={{padding:40}}>Loading…</p></main>;
+  if(!auth.user)return <SignIn needsSetup={auth.needsSetup} onDone={u=>{setAuth({user:u,needsSetup:false,checked:true});setNav("")}}/>;
 
   return <AppContext.Provider value={context}><>
     <main className={role==="floor"?"floor-shell":"app-shell"}>
-      <header className={role==="floor"?"floor-top":"topbar"}><div className="logo">Make<span>Logic</span></div><nav className="rolebar" aria-label="Preview role">{(["sales","owner","floor"] as Role[]).map(r=><button key={r} onClick={()=>changeRole(r)} className={role===r?"active":""}>{r==="sales"?"Sales Rep":r==="owner"?"Owner":"Warehouse"}</button>)}</nav><button className="notification-button" aria-label={`${unread} unread notifications`} onClick={()=>setNotificationsOpen(v=>!v)}><span>♢</span>{unread>0&&<b>{unread}</b>}</button><button className="avatar" aria-label="Open my account" onClick={()=>goNav(role==="owner"?"Settings & access":"My account")}>{user.slice(0,2).toUpperCase()}</button></header>
+      <header className={role==="floor"?"floor-top":"topbar"}><div className="logo">Make<span>Logic</span></div><span className="company-chip">{data.settings.company||""}</span><div className="topbar-right"><button className="notification-button" aria-label={`${unread} unread notifications`} onClick={()=>setNotificationsOpen(v=>!v)}><span>♢</span>{unread>0&&<b>{unread}</b>}</button><button className="avatar" aria-label="Open my account" title={`${auth.user.name} · ${auth.user.role}`} onClick={()=>goNav("My account")}>{user.split(" ").map(x=>x[0]).join("").slice(0,2).toUpperCase()}</button></div></header>
       <div className={role==="floor"?"floor-app":"app-layout"}>
-        <SideNav role={role} nav={nav} setNav={goNav}/>
+        <SideNav role={role} nav={currentNav} setNav={goNav}/>
         <section className={role==="floor"?"floor-workspace":"workspace"}>
-          {!mounted?<p className="intro">Loading company records…</p>:role==="sales"?<SalesView nav={nav}/>:role==="owner"?<OwnerView nav={nav}/>:nav==="My account"?<SalesViewAccount/>:<FloorView nav={nav} line={currentLine} setLine={setLine}/>}
+          {!loaded?<p className="intro">Loading company records…</p>:currentNav==="My account"?<SalesView nav="My account"/>:role==="sales"?<SalesView nav={currentNav}/>:role==="owner"?<OwnerView nav={currentNav}/>:<FloorView nav={currentNav} line={currentLine} setLine={setLine}/>}
         </section>
       </div>
     </main>
-    {!loaded&&<div className="save-indicator">Loading company records…</div>}
     <ModalHost modal={modal.type} arg={modal.arg} close={()=>setModalState({type:null})}/>
     {notificationsOpen&&<NotificationCenter role={role} unread={unread} close={()=>setNotificationsOpen(false)} markRead={()=>commit(v=>({...v,notices:v.notices.map(n=>({...n,read:true}))}),"notifications","All notifications marked read")}/>}
     {customer&&<CustomerProfileDrawer customer={customer} close={()=>setCustomerId("")}/>}
@@ -63,10 +62,8 @@ export default function Home(){
   </></AppContext.Provider>;
 }
 
-function SalesViewAccount(){return <SalesView nav="My account"/>}
-
 function SideNav({role,nav,setNav}:{role:Role;nav:string;setNav:(v:string)=>void}){
-  if(role==="owner")return <aside className="sidebar owner-sidebar"><small>OWNER WORKSPACE</small><button onClick={()=>setNav("Control center")} className={`owner-home ${nav==="Control center"?"selected":""}`}><span>⌂</span>Control center</button><div className="owner-nav-groups">{ownerGroups.map((group,index)=>{const active=group.items.includes(nav);return <details key={group.label} open={active||index===0}><summary><span>{group.label}</span><i>⌄</i></summary><div>{group.items.map(item=><button key={item} onClick={()=>setNav(item)} className={nav===item?"selected":""}>{item}</button>)}</div></details>})}</div></aside>;
+  if(role==="owner")return <aside className="sidebar owner-sidebar"><small>OWNER WORKSPACE</small><button onClick={()=>setNav("Control center")} className={`owner-home ${nav==="Control center"?"selected":""}`}><span>⌂</span>Control center</button><div className="owner-nav-groups">{ownerGroups.map((group,index)=>{const active=group.items.includes(nav);return <details key={group.label} open={active||index===0}><summary><span>{group.label}</span><i>⌄</i></summary><div>{group.items.map(item=><button key={item} onClick={()=>setNav(item)} className={nav===item?"selected":""}>{item}</button>)}</div></details>})}<button onClick={()=>setNav("My account")} className={nav==="My account"?"selected":""} style={{marginTop:10}}>My account</button></div></aside>;
   const items=role==="sales"?salesNav:floorNav;
   return <aside className={role==="floor"?"floor-side":"sidebar"}><small>{role==="sales"?"SALES WORKSPACE":"WAREHOUSE FLOOR"}</small>{items.map(x=><button key={x} onClick={()=>setNav(x)} className={nav===x?"selected":""}>{x}</button>)}</aside>;
 }

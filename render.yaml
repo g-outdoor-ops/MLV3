@@ -15,6 +15,15 @@ services:
         fromDatabase:
           name: makelogic-v3-db
           property: connectionString
+      # QuickBooks Online — from your app at developer.intuit.com (set in the Render dashboard)
+      - key: QBO_CLIENT_ID
+        sync: false
+      - key: QBO_CLIENT_SECRET
+        sync: false
+      - key: QBO_REDIRECT_URI
+        sync: false
+      - key: QBO_ENV
+        value: production
 
 databases:
   - name: makelogic-v3-db

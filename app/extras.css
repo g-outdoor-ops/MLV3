@@ -8,6 +8,13 @@
 .empty-list{color:#7b867f;padding:14px 4px;font-size:14px}
 .secondary.giant{width:100%;padding:18px;border-radius:12px;font-size:18px;font-weight:900}
 .floor-actions{display:flex;gap:10px;flex-wrap:wrap}.floor-actions>button{flex:1;min-width:160px}
-.modal{max-height:92vh;overflow:auto;box-sizing:border-box}.order-line{margin:0;box-sizing:border-box}.order-line label{min-width:0}
+.modal{max-height:92vh;overflow:auto;box-sizing:border-box}
 .floor-workspace .panel{color:#17211b}.floor-workspace .panel .money-row strong{color:#17211b}
 .detail-drawer .form-grid label{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:700;color:#536158}.detail-drawer .form-grid input,.detail-drawer .form-grid select{font:inherit;font-size:14px;padding:8px;border:1px solid #d5ded7;border-radius:9px}
+.signin-wrap{min-height:calc(100vh - 72px);display:grid;place-items:center;padding:24px}.signin{width:min(440px,100%);padding:30px}.signin label{display:block;font-weight:700;font-size:13px;color:#536158;margin:12px 0 0}.signin label small{font-weight:600;color:#7b867f}.signin input{display:block;width:100%;margin-top:6px;padding:11px 12px;border:1px solid #d5ded7;border-radius:10px;font:inherit;font-size:15px;box-sizing:border-box}.signin .primary.full{margin-top:18px}
+.form-error{color:#c0392b;font-weight:700;font-size:13px;margin:10px 0 0}
+.company-chip{margin-left:14px;font-weight:700;color:#536158;font-size:14px}.topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px}.floor-top .company-chip{color:#B8BFBA}
+.line-item{display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:12px;align-items:end;padding:12px;border:1px solid #dfe6e1;border-radius:12px;background:#fbfcfb;margin:0}.line-item label{display:flex;flex-direction:column;gap:4px;min-width:0}.line-item label small{min-height:14px}.line-item select,.line-item input{width:100%;min-width:0;box-sizing:border-box}.line-item .cancel{margin:0;padding:10px 12px}
+.modal .form-grid{margin:12px 0}.modal .form-grid label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:700;color:#536158}.modal .form-grid input,.modal .form-grid select{font:inherit;font-size:15px;padding:10px 12px;border:1px solid #d5ded7;border-radius:10px;width:100%;box-sizing:border-box}
+@media (max-width:760px){.line-item{grid-template-columns:1fr 1fr}}
+.role-manager .form-grid label,.settings-card .form-grid label{display:flex;flex-direction:column;gap:6px;font-weight:700;font-size:13px;color:#536158}.role-manager .form-grid input,.role-manager .form-grid select,.settings-card .form-grid input,.settings-card .form-grid select{padding:10px 12px;border:1px solid #d5ded7;border-radius:10px;font:inherit;font-size:14px;width:100%;box-sizing:border-box}.role-manager .form-grid input::placeholder{color:#a8b1ab}

@@ -1,28 +1,34 @@
 # MakeLogic v3
 
-Customers, quotes, orders, production, warehouse, inventory, quality, purchasing and money for EcoForm Bottles — one shared company record, three workspaces.
+Customers, quotes, orders, production, warehouse, inventory, quality, purchasing and money for EcoForm Bottles — one shared company record, three workspaces, real sign-ins, QuickBooks Online.
 
-## What is wired up
+## Going live
 
-- **Sales Rep** — dashboard with live KPIs and search; leads and customers (add, CSV import, edit, agreed prices per customer); quotes and invoices; **New order** with multiple items, a shipping choice from the rate table, discount (over the limit or under the floor → owner approval), a warehouse note and an invoice note. Each order shows a Placed → In production → Quality check → Ready → Shipped → Invoiced → Paid pipeline; once shipped, **Create invoice** and **Record payment** are one click. Quotes convert to orders; the production calendar shows work orders, due dates, deliveries and maintenance.
-- **Owner** — control center with live decisions (approvals, unscheduled work orders, quality holds, materials to order, overdue invoices, maintenance due), today's floor, live metrics and cash strip. Work orders (line, date, quantity, release, start, finish), production calendar (drag to move), quality (per-run checklist → pass to stock / scrap and re-run), maintenance (schedule, complete with downtime), inventory (finished goods with on-hand / promised / free; raw materials with reorder points; record movements; add items), purchasing (suggestions → PO → receive with landed cost rolled into unit cost), item rates (list, floor, minimum, discount limit, cost, material), P&L (COGS from item costs, margin by product), reports and CSV exports, settings (pricing rules, shipping rates, lines, QuickBooks, roles, warehouse link, backup, starter data).
-- **Warehouse** (`/?floor=<key>#warehouse`) — the running work order for the chosen line: +1 rack, +1 scrap, add any amount by racks or bottles, pause / problem, undo, quality note, finish → quality checks. Pack orders: mark packed, mark shipped (stock moves, invoice unlocks). A rotated key turns old tablet links away.
+1. **Deploy** (Render Blueprint, see below). The first visit shows *Create the owner account* — that becomes the Owner sign-in.
+2. **Add people** under Owner → Settings & access → People & sign-ins: each person gets an email, a temporary password and a workspace (Sales, Warehouse, Owner). They change their password under My account. The warehouse tablet signs in once as the warehouse account and stays signed in for 30 days.
+3. **Products, prices, materials**: Item rates (list price, floor, minimum, discount limit, unit cost, main material) and Inventory (add items, record counts).
+4. **QuickBooks Online** (owner, once):
+   - Create an app at developer.intuit.com → *QuickBooks Online Accounting* scope.
+   - Redirect URI: `https://<your-app>.onrender.com/api/qbo/callback`.
+   - In Render → Environment, set `QBO_CLIENT_ID`, `QBO_CLIENT_SECRET`, `QBO_REDIRECT_URI` (the URI above) and `QBO_ENV=production` (use `sandbox` with a sandbox company while testing). Redeploy.
+   - Settings & access → **Connect to QuickBooks** → approve in Intuit. From then on every invoice created here is created in QuickBooks (same number, items, discount, shipping), *Email invoice* sends QuickBooks' own email with a Pay Now link, *Record payment* posts the payment against the QuickBooks invoice, and *Sync now* pulls balances back so payments made in QuickBooks mark orders paid here.
+5. Databases that still hold sample records show a banner; **Remove sample records** (keeps products, zeroes stock) or **Clear all company data** live in Settings & access. Starter data is otherwise empty.
 
-Everything each role does updates the others. An order that exceeds free stock creates a work order for the owner; finishing a run puts it in Quality; passing quality adds to stock and moves the order to Ready; shipping removes stock and unlocks the invoice.
+## What each workspace does
+
+- **Sales** — dashboard, leads, customers (add, CSV import, agreed prices), quotes and invoices, **New order** with multiple items, a shipping choice from the rate table *or a typed freight amount for this shipment* (LTL quotes), discount (over the limit or under the floor → owner approval), warehouse note and invoice note. Order pipeline Placed → In production → Quality check → Ready → Shipped → Invoiced → Paid; once shipped: Create invoice, Email invoice / pay link, Record payment.
+- **Owner** — control center with live decisions and metrics; work orders, production calendar (drag to move), quality checklist per run, maintenance, inventory (on hand / promised / free, movements), purchasing (POs, receive with landed cost), item rates, P&L, reports, settings (people, pricing rules, shipping rates, lines, QuickBooks, backup, data reset).
+- **Warehouse** — the running work order for the chosen line: +1 rack, +1 scrap, add any amount, pause, undo, quality note, finish → quality checks. Pack orders: mark packed, mark shipped.
 
 ## Code layout
 
-- `app/app-data.ts` — data model, EcoForm starter data, `normalize()` (fills defaults so data saved by earlier versions keeps loading), money/stock helpers.
-- `app/page.tsx` — shell: roles, navigation, load/save through `/api/state`, drawers and modals.
-- `app/components/store.tsx` — context and the shared row/tile components.
-- `app/components/sales.tsx`, `owner.tsx`, `floor.tsx` — the three workspaces.
-- `app/components/modals.tsx` — order/quote/invoice, work order, item rate, purchase order, maintenance, inventory, CRM forms.
-- `app/components/drawers.tsx` — order / document / work order / PO detail with every action, customer profile, notifications.
-- `app/api/state/route.ts` — one JSON document + audit log in Postgres (Render) or D1 (Cloudflare).
-
-Existing deployments keep their saved data. A database still holding the old Pure Alkaline test records shows a banner on the control center; **Settings & access → Load EcoForm starter data** replaces it.
-
-QuickBooks: the panel records the connection and marks invoices/customers as synced. The live Intuit OAuth + Invoice/Payment API calls are the next piece and need your Intuit developer keys.
+- `app/app-data.ts` — data model, `normalize()` (keeps older saved records loading), money/stock helpers.
+- `app/page.tsx` — shell: sign-in gate, navigation, load/save through `/api/state`, drawers and modals.
+- `app/components/` — `auth.tsx` (sign-in / setup, API helpers), `store.tsx`, `sales.tsx`, `owner.tsx`, `floor.tsx`, `modals.tsx`, `drawers.tsx`.
+- `app/server/db.ts` — Postgres (Render) or D1 (Cloudflare): `app_state`, `audit_events`, `users`, `sessions`, `qbo_tokens`.
+- `app/server/auth.ts` — PBKDF2 password hashing, server-side sessions, HttpOnly cookie.
+- `app/server/qbo.ts` — QuickBooks OAuth 2.0, token refresh, customer / item / invoice / payment / send / balance calls.
+- `app/api/` — `auth`, `state`, `qbo/connect`, `qbo/callback`, `qbo/action`, `health`.
 
 ---
 
