@@ -13,6 +13,7 @@ import "./calendar-legend-fix.css";
 import "./operations-workspaces.css";
 import "./accounts-roles.css";
 import "./warehouse-link.css";
+import "./clickthroughs.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
