@@ -21,11 +21,13 @@ export default function Home(){
   const[unit,setUnit]=useState<"bottles"|"boxes">("boxes");
   const[amount,setAmount]=useState("1");
   const[goodCount,setGoodCount]=useState(1250);
+  const[notificationsOpen,setNotificationsOpen]=useState(false);
+  const[unread,setUnread]=useState(5);
   const notify=(text:string)=>{setToast(text);setTimeout(()=>setToast(""),2800)};
   const changeRole=(next:Role)=>{setRole(next);setNav(next==="sales"?"Dashboard":next==="owner"?"Control center":"Production")};
   return <>
     <main className={role==="floor"?"floor-shell":"app-shell"}>
-      <header className={role==="floor"?"floor-top":"topbar"}><Logo/><RoleBar role={role} setRole={changeRole}/><div className="avatar">{role==="sales"?"DG":role==="owner"?"CG":"WH"}</div></header>
+      <header className={role==="floor"?"floor-top":"topbar"}><Logo/><RoleBar role={role} setRole={changeRole}/><button className="notification-button" aria-label={`${unread} unread notifications`} onClick={()=>setNotificationsOpen(v=>!v)}><span>♢</span>{unread>0&&<b>{unread}</b>}</button><div className="avatar">{role==="sales"?"DG":role==="owner"?"CG":"WH"}</div></header>
       <div className={role==="floor"?"floor-app":"app-layout"}>
         <SideNav role={role} nav={nav} setNav={setNav}/>
         <section className={role==="floor"?"floor-workspace":"workspace"}>
@@ -34,6 +36,7 @@ export default function Home(){
       </div>
     </main>
     {modal&&<ActionModal type={modal} close={()=>setModal(null)} complete={m=>{setModal(null);notify(m)}}/>}
+    {notificationsOpen&&<NotificationCenter role={role} unread={unread} close={()=>setNotificationsOpen(false)} markRead={()=>setUnread(0)}/>} 
     {toast&&<Toast text={toast}/>} 
   </>;
 }
@@ -112,6 +115,14 @@ function OwnerControlCenter({setModal}:{setModal:(m:Modal)=>void}){
 }
 function ControlMetric({label,value,danger}:{label:string;value:string;danger?:boolean}){return <div className="control-metric"><span>{label}</span><strong className={danger?"danger":""}>{value}</strong></div>}
 function StatusLine({label,detail,state,alert}:{label:string;detail:string;state:string;alert?:boolean}){return <div className="status-line"><span><b>{label}</b><small>{detail}</small></span><em className={alert?"alert":""}>{state}</em></div>}
+function NotificationCenter({role,unread,close,markRead}:{role:Role;unread:number;close:()=>void;markRead:()=>void}){const notices=[
+  {kind:"payment",title:"Payment received",detail:"Atlas Chemical paid invoice INV-390 · $2,160",time:"8 minutes ago",urgent:false},
+  {kind:"warehouse",title:"Warehouse completed WO-1047",detail:"8,000 16 oz Clear bottles added to stock",time:"24 minutes ago",urgent:false},
+  {kind:"order",title:"New order #2052",detail:"Westfield Supply · 18 cases · Due September 9",time:"41 minutes ago",urgent:false},
+  {kind:"alert",title:"Blue caps are running low",detail:"About 6 production days remain · Suggested order 12,000",time:"1 hour ago",urgent:true},
+  {kind:"quality",title:"Quality check still needed",detail:"WO-1048 needs its final wall-thickness check",time:"1 hour ago",urgent:true},
+  {kind:"packing",title:"Order #2051 packed",detail:"Atlas Chemical · 8 cases ready for shipping",time:"2 hours ago",urgent:false},
+];return <div className="notification-layer" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><aside className="notification-drawer"><header><div><p className="eyebrow">Live company activity</p><h2>Notifications</h2></div><button className="drawer-close" onClick={close}>×</button></header><div className="notification-tools"><span>{unread} unread</span><button onClick={markRead}>Mark all read</button></div><div className="notification-list">{notices.map((n,i)=><button key={n.title} className={n.urgent?"urgent":""}><i className={`notice-icon ${n.kind}`}>{n.kind==="payment"?"$":n.kind==="warehouse"?"✓":n.kind==="order"?"+":n.kind==="alert"?"!":n.kind==="quality"?"Q":"▣"}</i><span><b>{n.title}</b><small>{n.detail}</small><em>{n.time}{role==="sales"&&n.kind==="warehouse"?" · Your order status updated":""}</em></span>{i<unread&&<u aria-label="Unread"/>}</button>)}</div><footer><button>Notification settings</button><small>Urgent alerts stay visible until reviewed.</small></footer></aside></div>}
 function OwnerCustomers({setModal}:{setModal:(m:Modal)=>void}){const[search,setSearch]=useState("");const all=[...customers,"Beacon Labs"];const filtered=all.filter(x=>x.toLowerCase().includes(search.toLowerCase()));return <><div className="heading-row"><div><p className="eyebrow">Owner directory</p><h1>Customers</h1><p className="intro">See customer balances, open orders, sales ownership, and account details.</p></div><div className="button-row"><button className="secondary" onClick={()=>setModal("import")}>Import CSV</button><button className="primary" onClick={()=>setModal("lead")}>+ Add customer</button></div></div><div className="customer-search"><span>⌕</span><input aria-label="Search owner customers" placeholder="Search by customer name..." value={search} onChange={e=>setSearch(e.target.value)}/>{search&&<button onClick={()=>setSearch("")}>Clear</button>}</div><p className="result-count">{filtered.length} {filtered.length===1?"customer":"customers"}</p><article className="panel list">{filtered.length?filtered.map((x,i)=><button key={x}><span className="initials">{x.split(" ").map(a=>a[0]).join("")}</span><span><b>{x}</b><small>{i%2===0?"Sales owner: Dad":"Sales owner: Sarah"}</small></span><span><b>{x==="Martin Supply"?"$3,240 overdue":x==="North Point Labs"?"$6,480 due":"Paid"}</b><small>{x==="Beacon Labs"?"No open orders":"1 open order"}</small></span></button>):<div className="empty-list">No customers match “{search}”.</div>}</article></>}
 function OwnerLeads({setModal}:{setModal:(m:Modal)=>void}){return <><div className="heading-row"><div><p className="eyebrow">All sales activity</p><h1>Leads</h1><p className="intro">See every lead entered by either rep, who owns it, and the next action.</p></div><button className="primary" onClick={()=>setModal("lead")}>+ Add lead</button></div><div className="recap four"><Kpi label="New" value="3"/><Kpi label="Follow up today" value="2" warn/><Kpi label="Quotes sent" value="2"/><Kpi label="Potential value" value="$28,400"/></div><article className="panel list"><LeadRow company="Hudson Labs" contact="Maria Chen · 215-555-0184" owner="Sarah" next="Call today"/><LeadRow company="Westfield Supply" contact="Tom Adams · tom@westfield.test" owner="Dad" next="Quote sent"/><LeadRow company="Greenline Co." contact="Website inquiry · 16 oz bottles" owner="Unassigned" next="Reply today"/></article></>}
 function OwnerDocuments({title,action,onAction,rows}:{title:string;action:string;onAction:()=>void;rows:string[]}){return <><div className="heading-row"><div><p className="eyebrow">Owner financial documents</p><h1>{title}</h1><p className="intro">Review documents from both sales reps, payment status, pricing, discounts, and shipping.</p></div><button className="primary" onClick={onAction}>{action}</button></div><div className="recap"><Kpi label={title==="Invoices"?"Outstanding":"Open quotes"} value={title==="Invoices"?"$9,720":"$15,880"} warn/><Kpi label={title==="Invoices"?"Paid this month":"Accepted this month"} value={title==="Invoices"?"$36,200":"$24,640"}/><Kpi label={title==="Invoices"?"Overdue":"Awaiting reply"} value={title==="Invoices"?"1":"2"}/></div><article className="panel list">{rows.map((r,i)=><button key={r}><span className="initials">{i+1}</span><b>{r}</b><span>Open →</span></button>)}</article></>}
