@@ -16,6 +16,18 @@ npm run dev
 npm run build
 ```
 
+## Deploy on Render
+
+This repository includes a Render Blueprint that creates both the MakeLogic web service and its PostgreSQL database.
+
+1. In Render, choose **New → Blueprint**.
+2. Connect the GitHub repository `g-outdoor-ops/MLV3`.
+3. Keep the detected `render.yaml` settings and choose **Apply**.
+4. Wait for the database and `makelogic-v3` web service to finish deploying.
+5. Open the `onrender.com` URL shown by Render.
+
+The first request automatically creates the required database tables and loads the starter company records. Future pushes to the `main` branch deploy automatically. For a production company account, upgrade the database from the free testing plan before entering important business data.
+
 This starter does not use `wrangler.jsonc`.
 
 ## Included Shape
