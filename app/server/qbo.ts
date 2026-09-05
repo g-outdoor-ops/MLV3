@@ -62,3 +62,98 @@ export async function invoiceBalance(qboId:string){const r=await api<{Invoice:{B
 
 // ---- payments ----
 export async function recordPayment(qboInvoiceId:string,customerQboId:string,amount:number,method?:string){const body:Record<string,unknown>={CustomerRef:{value:customerQboId},TotalAmt:amount,Line:[{Amount:amount,LinkedTxn:[{TxnId:qboInvoiceId,TxnType:"Invoice"}]}],PrivateNote:method?`Recorded in MakeLogic · ${method}`:"Recorded in MakeLogic"};const r=await api<{Payment:{Id:string}}>("POST","payment",body);await audit("quickbooks","qbo.payment",`payment ${r.Payment.Id} on invoice ${qboInvoiceId}`);return String(r.Payment.Id)}
+
+// ---------------------------------------------------------------------------
+// Import FROM QuickBooks
+// ---------------------------------------------------------------------------
+// Everything above pushes to QuickBooks. This section reads back, because QuickBooks is the master
+// record for customers: the books already hold years of names, terms and balances, and retyping them
+// here would create a second, immediately-wrong copy.
+//
+// Reads are metered by Intuit (Builder tier: 500k/month, hard block, no overage), so this pages in
+// batches of 1,000 rather than issuing a request per record, and stops at a page cap instead of
+// looping forever on a bad response.
+const PAGE = 1000;
+const MAX_PAGES = 40;           // 40k records of any one type — far beyond a shop this size
+
+export type QboRow = Record<string, unknown>;
+
+// QuickBooks' query language is SQL-like but not SQL. Values are single-quoted and it has no
+// parameter binding, so anything interpolated must be escaped by doubling quotes.
+function qEscape(v: string) { return String(v).replace(/'/g, "''"); }
+
+async function queryAll(entity: string, where = ''): Promise<QboRow[]> {
+  const out: QboRow[] = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const start = page * PAGE + 1;
+    const sql = `SELECT * FROM ${entity}${where ? ' WHERE ' + where : ''} STARTPOSITION ${start} MAXRESULTS ${PAGE}`;
+    const res = await api<{ QueryResponse?: Record<string, unknown> }>('GET', `query?query=${encodeURIComponent(sql)}`);
+    const rows = (res.QueryResponse?.[entity] as QboRow[] | undefined) || [];
+    out.push(...rows);
+    if (rows.length < PAGE) break;      // short page means we reached the end
+  }
+  return out;
+}
+
+const str = (v: unknown) => (v == null ? '' : String(v));
+const numOf = (v: unknown) => { const n = Number(v); return isFinite(n) ? n : 0; };
+function addrOf(a: unknown): string {
+  const x = (a || {}) as Record<string, unknown>;
+  return [x.Line1, x.Line2, [x.City, x.CountrySubDivisionCode].filter(Boolean).join(' '), x.PostalCode]
+    .map(str).filter(Boolean).join(', ');
+}
+
+export type ImportedCustomer = {
+  qboId: string; name: string; contact: string; email: string; phone: string;
+  billing: string; delivery: string; terms: string; balance: number; active: boolean;
+};
+export type ImportedInvoice = {
+  qboId: string; docNumber: string; customerQboId: string; date: string; due: string;
+  total: number; balance: number; lines: { item: string; quantity: number; rate: number; amount: number }[];
+};
+
+export async function importCustomers(): Promise<ImportedCustomer[]> {
+  const rows = await queryAll('Customer');
+  return rows.map(r => ({
+    qboId: str(r.Id),
+    // DisplayName is what the books actually show; CompanyName is often blank on smaller accounts.
+    name: str(r.DisplayName || r.CompanyName || r.FullyQualifiedName),
+    contact: [str(r.GivenName), str(r.FamilyName)].filter(Boolean).join(' '),
+    email: str((r.PrimaryEmailAddr as Record<string, unknown> | undefined)?.Address),
+    phone: str((r.PrimaryPhone as Record<string, unknown> | undefined)?.FreeFormNumber),
+    billing: addrOf(r.BillAddr),
+    delivery: addrOf(r.ShipAddr) || addrOf(r.BillAddr),
+    terms: str((r.SalesTermRef as Record<string, unknown> | undefined)?.name) || 'Net 30',
+    balance: numOf(r.Balance),
+    active: r.Active !== false,
+  })).filter(c => c.name);
+}
+
+export async function importInvoices(sinceISO?: string): Promise<ImportedInvoice[]> {
+  // A date bound keeps a re-import cheap: only invoices touched since the last run come back.
+  const where = sinceISO ? `MetaData.LastUpdatedTime > '${qEscape(sinceISO)}'` : '';
+  const rows = await queryAll('Invoice', where);
+  return rows.map(r => {
+    const lines = ((r.Line as QboRow[] | undefined) || [])
+      .filter(l => str(l.DetailType) === 'SalesItemLineDetail')
+      .map(l => {
+        const d = (l.SalesItemLineDetail || {}) as Record<string, unknown>;
+        return {
+          item: str((d.ItemRef as Record<string, unknown> | undefined)?.name) || str(l.Description) || 'Item',
+          quantity: numOf(d.Qty) || 1,
+          rate: numOf(d.UnitPrice),
+          amount: numOf(l.Amount),
+        };
+      });
+    return {
+      qboId: str(r.Id),
+      docNumber: str(r.DocNumber),
+      customerQboId: str((r.CustomerRef as Record<string, unknown> | undefined)?.value),
+      date: str(r.TxnDate),
+      due: str(r.DueDate) || str(r.TxnDate),
+      total: numOf(r.TotalAmt),
+      balance: numOf(r.Balance),
+      lines,
+    };
+  }).filter(i => i.qboId);
+}
