@@ -21,7 +21,9 @@ export async function POST(request:Request){
         if(user.role!=="owner")return Response.json({error:"Owner only"},{status:403});
         const row=await readState();const data=row.payload;
 
+        const st=await status();
         const [qCustomers,qInvoices]=await Promise.all([importCustomers(),importInvoices(body.since)]);
+        console.log("[qbo.import] realm",st.realmId,"env",st.env,"company",st.company,"customers",qCustomers.length,"invoices",qInvoices.length);
 
         // QuickBooks is the master for customers, so an import must UPDATE the matching local record
         // rather than add a second one. Match on qboId first; for records that pre-date the connection
@@ -88,7 +90,8 @@ export async function POST(request:Request){
         await writeState({...data,customers:finalCustomers,documents,
           settings:{...data.settings,quickBooks:{...data.settings.quickBooks,connected:true,lastSync:new Date().toISOString()}}},
           user.email,"qbo.import",summary);
-        return Response.json({ok:true,customers:{added,updated,total:qCustomers.length},
+        return Response.json({ok:true,company:st.company||"",env:st.env||"",realmId:st.realmId||"",
+          customers:{added,updated,total:qCustomers.length},
           invoices:{added:invAdded,updated:invUpdated,total:qInvoices.length,orphaned},summary});
       }
       default:return Response.json({error:"Unknown op"},{status:400});
