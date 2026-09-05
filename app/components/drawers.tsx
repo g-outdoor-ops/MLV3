@@ -1,11 +1,11 @@
 "use client";
 import { useState } from "react";
-import { DEFAULT_QC, DEFAULT_SHIP, STAGES, documentTotal, fmtDay, orderTotals, stageOf, todayIso, type Customer, type WorkOrder } from "../app-data";
+import { DEFAULT_QC, DEFAULT_SHIP, STAGES, documentBalance, documentTotal, fmtDay, orderTotals, stageOf, todayIso, type Customer, type DocumentRecord, type WorkOrder } from "../app-data";
 import { DetailField, ProfileSection, nextId, now, num, uid, useApp, usd2, type Role } from "./store";
 import { qboCall } from "./auth";
 
 export function RecordDrawer({id,close}:{id:string;close:()=>void}){
-  const {data,commit,notify,setModal,role,user}=useApp();
+  const {data,commit,notify,setModal,openRecord,role,user}=useApp();
   const doc=data.documents.find(x=>x.id===id);const order=data.orders.find(x=>x.id===id);const work=data.workOrders.find(x=>x.id===id);const po=(data.purchaseOrders||[]).find(x=>x.id===id);
   const customer=data.customers.find(x=>x.id===(doc?.customerId||order?.customerId||data.orders.find(o=>o.id===work?.orderId)?.customerId));
   const owner=role==="owner";
@@ -65,13 +65,55 @@ export function RecordDrawer({id,close}:{id:string;close:()=>void}){
     const payInvoice=async()=>{let pid="";if(doc.qboId&&customer?.qboId){try{const r=await qboCall({op:"payment.create",qboId:doc.qboId,customerQboId:customer.qboId,amount:total,method:window.prompt("How was it paid? (check, ACH, card, cash)","check")||"payment"});pid=String(r.paymentId||"")}catch(e){notify(`QuickBooks: ${e instanceof Error?e.message:"payment failed"}`,"Invoices",true);return}}
       act(v=>({...v,documents:v.documents.map(x=>x.id===doc.id?{...x,status:"Paid",paid:total,paymentQboId:pid||x.paymentQboId}:x),orders:v.orders.map(o=>o.invoiceId===doc.id?{...o,stage:6,status:"Paid",payment:"Paid"}:o),customers:v.customers.map(x=>x.id===doc.customerId?{...x,balance:Math.max(0,x.balance-total)}:x),activities:[activity(doc.customerId,"Payment received",`${doc.id} · ${usd2(total)}`),...v.activities]}),"invoice.payment",`${doc.id} paid`,`Payment received — ${doc.id} · ${usd2(total)}${pid?" · recorded in QuickBooks":""}`,"Invoices",true)};
     const sendDoc=async()=>{if(!doc.qboId){notify(data.settings.quickBooks.connected?"This invoice isn't in QuickBooks yet":"Connect QuickBooks to email invoices with a Pay Now link","Invoices");return}try{await qboCall({op:"invoice.send",qboId:doc.qboId,email:customer?.email});notify(`Invoice emailed from QuickBooks to ${customer?.email||customer?.name}`,"Invoices")}catch(e){notify(`QuickBooks: ${e instanceof Error?e.message:"send failed"}`,"Invoices",true)}};
+    // Duplicate for a reorder. Copies the customer and every line onto a fresh invoice dated today,
+    // and deliberately does NOT carry over the QuickBooks ids, payment or balance — those belong to the
+    // original document. The copy is local until it is created in QuickBooks like any other invoice.
+    const duplicate=()=>{
+      const prefix=doc.kind==="quote"?"Q-":"INV-";
+      // Numbered off this app's own documents only. Imported QuickBooks invoices use qbi ids and their
+      // own numbering; mixing the two would make our next number collide with theirs.
+      const id=nextId(prefix,data.documents.filter(d=>d.kind===doc.kind&&d.id.startsWith(prefix)).map(d=>d.id),1001);
+      const lines=doc.lines&&doc.lines.length?doc.lines:[{item:doc.item,quantity:doc.quantity||doc.cases,rate:doc.rate}];
+      const sub=lines.reduce((a,l)=>a+l.quantity*l.rate,0);
+      const copy:DocumentRecord={...doc,id,status:"Draft",due:todayIso(),txnDate:todayIso(),
+        paid:0,lines,total:Math.round((sub*(1-(doc.discount||0)/100)+(doc.shipping||0))*100)/100,
+        balance:undefined,qboId:undefined,qboDocNumber:undefined,paymentQboId:undefined,qbSynced:false,
+        source:undefined,orderId:undefined};
+      act(v=>({...v,documents:[copy,...v.documents],
+        activities:[activity(doc.customerId,"Invoice duplicated",`${id} copied from ${doc.id}`),...v.activities]}),
+        "invoice.duplicate",`${id} from ${doc.id}`,
+        `${id} created as a copy of ${doc.id} — open it, adjust the quantities, then create it in QuickBooks`,"Invoices");
+      close();openRecord(id);
+    };
     const approveQuote=()=>act(v=>({...v,documents:v.documents.map(x=>x.id===doc.id?{...x,status:"Sent"}:x)}),"quote.approve",`${doc.id} approved`,`${doc.id} approved — ready to email`,"Quotes");
     const send=()=>act(v=>({...v,documents:v.documents.map(x=>x.id===doc.id?{...x,status:"Sent"}:x),activities:[activity(doc.customerId,"Quote emailed",`${doc.id} · ${usd2(total)}`),...v.activities]}),"quote.send",`${doc.id} sent`,`Quote ${doc.id} emailed to ${customer?.contact||customer?.name}`,"Quotes");
-    body=<><div className="detail-status"><span>Status</span><b>{doc.status}</b></div><DetailField label="Customer" value={customer?.name||"Lead"}/><DetailField label="Items" value={`${num(doc.quantity||doc.cases)} × ${doc.item}`}/><DetailField label="Price each" value={usd2(doc.rate)}/><DetailField label="Discount and shipping" value={`${doc.discount}% · ${usd2(doc.shipping)}`}/><DetailField label="Total" value={usd2(total)}/><DetailField label={doc.kind==="quote"?"Good until":"Due"} value={doc.due}/>{doc.orderId&&<DetailField label="Order" value={doc.orderId}/>}{doc.note&&<DetailField label="Note to customer" value={doc.note}/>}{doc.kind==="invoice"&&<DetailField label="QuickBooks" value={doc.qboId?`Invoice #${doc.qboDocNumber||doc.qboId}${doc.paymentQboId?" · payment recorded":""}`:"Not in QuickBooks"}/>}</>;
+    const dl=doc.lines&&doc.lines.length?doc.lines:[{item:doc.item,quantity:doc.quantity||doc.cases,rate:doc.rate}];
+    const dsub=dl.reduce((a,l)=>a+l.quantity*l.rate,0);
+    const dbal=documentBalance(doc);
+    body=<><div className="detail-status"><span>Status</span><b>{doc.status}</b></div>
+      <DetailField label="Customer" value={customer?.name||"Lead"}/>
+      {doc.txnDate&&<DetailField label="Invoice date" value={doc.txnDate}/>}
+      <DetailField label={doc.kind==="quote"?"Good until":"Due"} value={doc.due}/>
+      <div className="doc-lines">
+        <table><thead><tr><th>Item</th><th className="r">Qty</th><th className="r">Rate</th><th className="r">Amount</th></tr></thead>
+        <tbody>{dl.map((l,i)=><tr key={i}><td>{l.item}</td><td className="r">{num(l.quantity)}</td><td className="r">{usd2(l.rate)}</td><td className="r">{usd2(l.quantity*l.rate)}</td></tr>)}</tbody></table>
+        <div className="doc-totals">
+          <div><span>Subtotal</span><b>{usd2(dsub)}</b></div>
+          {doc.discount?<div><span>Discount {doc.discount}%</span><b>−{usd2(dsub*doc.discount/100)}</b></div>:null}
+          {doc.shipping?<div><span>Shipping</span><b>{usd2(doc.shipping)}</b></div>:null}
+          <div className="grand"><span>Total</span><b>{usd2(total)}</b></div>
+          {doc.kind==="invoice"&&<><div><span>Paid</span><b>{usd2(doc.paid||0)}</b></div>
+            <div className={dbal>0?"due":""}><span>Balance due</span><b>{usd2(dbal)}</b></div></>}
+        </div>
+      </div>
+      {doc.orderId&&<DetailField label="Order" value={doc.orderId}/>}
+      {doc.note&&<DetailField label="Note to customer" value={doc.note}/>}
+      {doc.kind==="invoice"&&<DetailField label="QuickBooks" value={doc.qboId?`Invoice #${doc.qboDocNumber||doc.qboId}${doc.source==="quickbooks"?" · imported":""}${doc.paymentQboId?" · payment recorded":""}`:"Not in QuickBooks"}/>}</>;
     footer=<><button className="secondary" onClick={close}>Close</button>
       {doc.kind==="quote"&&doc.status==="Awaiting approval"&&owner&&<button className="primary" onClick={approveQuote}>Approve pricing</button>}
       {doc.kind==="quote"&&(doc.status==="Draft")&&<button className="secondary" onClick={send}>Email quote</button>}
       {doc.kind==="quote"&&doc.status!=="Accepted"&&doc.status!=="Awaiting approval"&&<button className="primary" onClick={()=>{close();setModal("order",doc.id)}}>Accept &amp; create order</button>}
+      {doc.kind==="invoice"&&<button className="secondary" onClick={duplicate}>Duplicate for reorder</button>}
       {doc.kind==="invoice"&&doc.status!=="Paid"&&<><button className="secondary" onClick={sendDoc}>Email invoice / pay link</button><button className="primary" onClick={payInvoice}>Record payment</button></>}</>;
   }
   // ---------------- WORK ORDER ----------------

@@ -4,7 +4,10 @@
 // previous UI keeps loading.
 
 export type Customer={id:string;name:string;kind:"customer"|"lead";contact:string;email:string;phone:string;rep:string;stage:string;balance:number;lifetimeSales:number;billing:string;delivery:string;terms:string;notes:string;prices?:Record<string,number>;qb?:boolean;qboId?:string};
-export type DocumentRecord={id:string;kind:"quote"|"invoice";customerId:string;item:string;cases:number;rate:number;discount:number;shipping:number;status:string;due:string;paid:number;orderId?:string;quantity?:number;qbSynced?:boolean;note?:string;qboId?:string;qboDocNumber?:string;paymentQboId?:string};
+export type DocumentRecord={id:string;kind:"quote"|"invoice";customerId:string;item:string;cases:number;rate:number;discount:number;shipping:number;status:string;due:string;paid:number;orderId?:string;quantity?:number;qbSynced?:boolean;note?:string;qboId?:string;qboDocNumber?:string;paymentQboId?:string;
+  // Imported from QuickBooks: the document exactly as the books hold it. `total` is authoritative and
+  // must never be recomputed — see documentTotal.
+  lines?:OrderLine[];total?:number;balance?:number;txnDate?:string;source?:"quickbooks"};
 export type OrderLine={item:string;quantity:number;rate:number};
 export type OrderRecord={id:string;customerId:string;item:string;cases:number;quantity:number;due:string;status:string;payment:string;
   lines?:OrderLine[];shipMethod?:string;shipping?:number;discount?:number;notes?:string;invoiceNote?:string;stage?:number;invoiceId?:string;rep?:string;createdAt?:string};
@@ -121,7 +124,17 @@ export const demoData:AppData={
 };
 
 // ---- helpers ----
-export const documentTotal=(d:DocumentRecord)=>Math.round((((d.quantity??d.cases)*d.rate)*(1-d.discount/100)+d.shipping)*100)/100;
+// A document's total. When it came from QuickBooks the books already hold the figure, so use it
+// verbatim: recomputing quantity × rate on a multi-line invoice multiplies a summed quantity against
+// one line's unit price, which is how an invoice can appear as $2.2m. Locally-created documents are
+// still single-item and compute as before.
+export const documentTotal=(d:DocumentRecord)=>{
+  if(d.total!=null)return Math.round(d.total*100)/100;
+  if(d.lines&&d.lines.length)return Math.round((d.lines.reduce((a,l)=>a+l.quantity*l.rate,0)*(1-d.discount/100)+d.shipping)*100)/100;
+  return Math.round((((d.quantity??d.cases)*d.rate)*(1-d.discount/100)+d.shipping)*100)/100;
+};
+// What is still owed. QuickBooks tells us directly; otherwise fall back to total less amount paid.
+export const documentBalance=(d:DocumentRecord)=>d.balance!=null?Math.round(d.balance*100)/100:Math.max(0,Math.round((documentTotal(d)-(d.paid||0))*100)/100);
 export const money=(n:number)=>"$"+n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 export const int=(n:number)=>Math.round(n).toLocaleString("en-US");
 // Orders saved by the earlier UI priced by the case; show them that way rather than re-pricing per bottle.

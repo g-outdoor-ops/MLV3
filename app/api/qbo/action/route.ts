@@ -70,12 +70,16 @@ export async function POST(request:Request){
           const qty=inv.lines.reduce((n,l)=>n+l.quantity,0);
           const doc:DocumentRecord={
             id:`qbi${inv.qboId}`,kind:"invoice",customerId,
+            // item/cases/rate are only the one-line summary the list views show. The authoritative
+            // figures are total/balance/lines below — squashing a multi-line invoice into a single
+            // quantity and rate and re-multiplying them is what produced impossible totals.
             item:first?first.item:"Invoice",cases:qty,quantity:qty,
             rate:first?first.rate:inv.total,discount:0,shipping:0,
             status:inv.balance<=0?"Paid":"Open",
             due:inv.due,paid:Math.max(0,inv.total-inv.balance),
             qbSynced:true,qboId:inv.qboId,qboDocNumber:inv.docNumber,
-            note:inv.lines.length>1?`${inv.lines.length} lines in QuickBooks`:undefined,
+            lines:inv.lines.map(l=>({item:l.item,quantity:l.quantity,rate:l.rate})),
+            total:inv.total,balance:inv.balance,txnDate:inv.date,source:"quickbooks",
           };
           const at=docByQbo.get(inv.qboId);
           if(at!=null){documents[at]={...documents[at],...doc,id:documents[at].id};invUpdated++}
