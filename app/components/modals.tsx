@@ -4,8 +4,8 @@ import { DEFAULT_QC, DEFAULT_SHIP, daysFromNow, fmtDay, freeStock, orderTotals, 
 import { CrmSection, nextId, now, num, uid, useApp, usd2, type Modal } from "./store";
 import { qboCall } from "./auth";
 
-function Shell({title,eyebrow,onSubmit,close,children,submitLabel,wide}:{title:string;eyebrow:string;onSubmit:(e:FormEvent<HTMLFormElement>)=>void;close:()=>void;children:React.ReactNode;submitLabel:string;wide?:boolean}){
-  return <div className="overlay" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><form className={`modal ${wide?"wide-modal":""}`} role="dialog" aria-modal="true" onSubmit={onSubmit}><button type="button" className="close" onClick={close}>×</button><p className="eyebrow">{eyebrow}</p><h2>{title}</h2>{children}<button className="primary full" type="submit">{submitLabel}</button><button type="button" className="cancel" onClick={close}>Cancel</button></form></div>;
+function Shell({title,eyebrow,onSubmit,close,children,submitLabel,wide,submitDisabled}:{title:string;eyebrow:string;onSubmit:(e:FormEvent<HTMLFormElement>)=>void;close:()=>void;children:React.ReactNode;submitLabel:string;wide?:boolean;submitDisabled?:boolean}){
+  return <div className="overlay" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><form className={`modal ${wide?"wide-modal":""}`} role="dialog" aria-modal="true" onSubmit={onSubmit}><button type="button" className="close" onClick={close}>×</button><p className="eyebrow">{eyebrow}</p><h2>{title}</h2>{children}<button className="primary full" type="submit" disabled={submitDisabled}>{submitLabel}</button><button type="button" className="cancel" onClick={close}>Cancel</button></form></div>;
 }
 
 // =============================== ORDER / QUOTE / INVOICE — multi-line, shipping table, discount guard, notes
@@ -31,7 +31,10 @@ export function OrderModal({kind,close,presetCustomer,fromQuote}:{kind:"order"|"
   const setLine=(i:number,patch:Partial<OrderLine>)=>setLines(ls=>ls.map((l,k)=>k===i?{...l,...patch,...(patch.item?{rate:0}:{})}:l));
   const dueLabel=fmtDay(new Date(due+"T12:00:00"));
 
+  const [saving,setSaving]=useState(false);
   const submit=async(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();if(!cust||!priced.length)return;
+    if(saving)return;setSaving(true);
+    try{
     if(kind==="order"){
       const id=nextId("SO-",data.orders.map(o=>o.id),1187);
       const rec:OrderRecord={id,customerId:cust.id,item:priced.map(l=>l.item).join(" + "),cases:t.cases,quantity:draft.quantity,due:dueLabel,status:needsApproval?"Needs approval":"Confirmed",payment:cust.terms,lines:priced,shipMethod:ship,shipping:t.ship,discount:disc,notes,invoiceNote:custNote,stage:0,rep:user,createdAt:new Date().toISOString()};
@@ -45,17 +48,25 @@ export function OrderModal({kind,close,presetCustomer,fromQuote}:{kind:"order"|"
       notify(`Order ${id} saved — ${usd2(t.total)}${newWOs.length?` · ${newWOs.map(w=>w.id).join(", ")} created`:""}${needsApproval?" · waiting for owner approval":""}`,"Orders",needsApproval);close();openRecord(id);
     } else {
       const id=nextId(kind==="quote"?"Q-":"INV-",data.documents.filter(x=>x.kind===kind).map(x=>x.id),kind==="quote"?2040:1042);
-      let qbo:{qboId?:string;docNumber?:string;customerId?:string}={};
+      let qbo:{qboId?:string;docNumber?:string;customerId?:string;total?:number;balance?:number}={};
       if(kind==="invoice"&&data.settings.quickBooks.connected){try{qbo=await qboCall({op:"invoice.create",invoice:{docNumber:id,customer:{id:cust.id,name:cust.name,contact:cust.contact,email:cust.email,phone:cust.phone,billing:cust.billing,delivery:cust.delivery,qboId:cust.qboId},lines:priced,discountPct:disc,shipping:t.ship,dueDate:due,memo:custNote,email:cust.email}}) as typeof qbo}catch(e){notify(`QuickBooks: ${e instanceof Error?e.message:"failed"} — invoice not created`,"Invoices",true);return}}
-      const doc:DocumentRecord={id,kind,customerId:cust.id,item:priced.map(l=>l.item).join(" + "),cases:t.cases,quantity:draft.quantity,rate:priced[0].rate,discount:disc,shipping:t.ship,status:kind==="quote"?(needsApproval?"Awaiting approval":"Draft"):"Open",due:dueLabel,paid:0,note:custNote,qbSynced:!!qbo.qboId,qboId:qbo.qboId,qboDocNumber:qbo.docNumber};
-      commit(v=>({...v,documents:[doc,...v.documents],customers:v.customers.map(c=>c.id===cust.id?{...c,stage:c.kind==="lead"&&kind==="quote"?"Quote sent":c.stage,balance:kind==="invoice"?c.balance+t.total:c.balance,qboId:qbo.customerId||c.qboId,qb:c.qb||!!qbo.qboId}:c),
+      // Keep every line and the computed total. item/cases/rate remain only as the one-line summary the
+      // list views show; storing rate as priced[0].rate and re-multiplying it by the summed quantity is
+      // what made a multi-line document display the wrong money. When QuickBooks created the invoice its
+      // TotalAmt is authoritative — it is what the customer will actually be billed.
+      const doc:DocumentRecord={id,kind,customerId:cust.id,item:priced.map(l=>l.item).join(" + "),cases:t.cases,quantity:draft.quantity,rate:priced[0].rate,discount:disc,shipping:t.ship,status:kind==="quote"?(needsApproval?"Awaiting approval":"Draft"):"Open",due:dueLabel,paid:0,note:custNote,qbSynced:!!qbo.qboId,qboId:qbo.qboId,qboDocNumber:qbo.docNumber,
+        lines:priced.map(l=>({item:l.item,quantity:l.quantity,rate:l.rate})),
+        total:typeof qbo.total==="number"?qbo.total:t.total,
+        balance:kind==="invoice"?(typeof qbo.balance==="number"?qbo.balance:t.total):undefined};
+      commit(v=>({...v,documents:[doc,...v.documents],customers:v.customers.map(c=>c.id===cust.id?{...c,stage:c.kind==="lead"&&kind==="quote"?"Quote sent":c.stage,balance:kind==="invoice"?Math.round((c.balance+(typeof qbo.total==="number"?qbo.total:t.total))*100)/100:c.balance,qboId:qbo.customerId||c.qboId,qb:c.qb||!!qbo.qboId}:c),
         notices:needsApproval&&kind==="quote"?[{id:uid("n"),title:`Quote ${id} needs approval`,detail:`${cust.name} · ${underFloor.length?"price under the floor":disc+"% discount"}`,urgent:true,read:false,createdAt:now(),target:"Quotes"},...v.notices]:v.notices,
         activities:[{id:uid("a"),customerId:cust.id,title:kind==="quote"?"Quote created":"Invoice created",detail:`${id} · ${usd2(t.total)}`,actor:user,createdAt:now()},...v.activities]}),`${kind}.create`,`${id} for ${cust.name}`);
       notify(kind==="quote"?(needsApproval?`Quote ${id} sent to the owner for approval`:`Quote ${id} saved — open it to email`):`Invoice ${id} created${qbo.qboId?" in QuickBooks":""}`,kind==="quote"?"Quotes":"Invoices");close();
     }
+    }finally{setSaving(false)}   // released on every path, including the early return when QuickBooks fails
   };
   const title=kind==="order"?"New customer order":kind==="quote"?"Create quote":"Create invoice";
-  return <Shell wide title={title} eyebrow={kind==="order"?"Sale to shipment":"Sales document"} onSubmit={submit} close={close} submitLabel={kind==="order"?(needsApproval?"Save & send for approval":"Place order"):kind==="quote"?"Save quote":"Create invoice"}>
+  return <Shell wide title={title} eyebrow={kind==="order"?"Sale to shipment":"Sales document"} onSubmit={submit} close={close} submitLabel={saving?"Saving…":kind==="order"?(needsApproval?"Save & send for approval":"Place order"):kind==="quote"?"Save quote":"Create invoice"} submitDisabled={saving}>
     <div className="form-grid"><label>Customer<select value={custId} onChange={e=>setCustId(e.target.value)}>{data.customers.map(x=><option value={x.id} key={x.id}>{x.name}{x.kind==="lead"?" (lead)":""}</option>)}</select></label><label>{kind==="invoice"?"Due date":"Needed by"}<input type="date" value={due} onChange={e=>setDue(e.target.value)}/></label></div>
     <div className="order-lines">{priced.map((l,i)=>{const r=finished.find(x=>x.item===l.item);const row=data.inventory.find(x=>x.item===l.item);const free=row?freeStock(row):0;return <div className="form-grid line-item" key={i}>
       <label>Item<select value={l.item} onChange={e=>setLine(i,{item:e.target.value})}>{finished.map(x=><option key={x.id}>{x.item}</option>)}</select></label>
