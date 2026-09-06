@@ -2,6 +2,7 @@ import { userFromRequest } from "../../../server/auth";
 import { readState, writeState } from "../../../server/db";
 import { createInvoice, disconnect, ensureCustomer, importCustomers, importInvoices, invoiceBalance, qboConfigured, recordPayment, sendInvoice, status, type CustomerIn, type InvoiceIn } from "../../../server/qbo";
 import type { Customer, DocumentRecord } from "../../../app-data";
+import { denyQboOp } from "../../../server/authz";
 
 type Body={op:string;since?:string;customer?:CustomerIn;invoice?:InvoiceIn;qboId?:string;email?:string;customerQboId?:string;amount?:number;method?:string;invoices?:{id:string;qboId:string}[]};
 
@@ -9,6 +10,8 @@ export async function POST(request:Request){
   const user=await userFromRequest(request);if(!user)return Response.json({error:"Please sign in"},{status:401});
   let body:Body;try{body=await request.json() as Body}catch{return Response.json({error:"Bad request"},{status:400})}
   try{
+    const qboDenied=denyQboOp(user,body.op);
+    if(qboDenied)return Response.json({error:qboDenied},{status:403});
     switch(body.op){
       case "status":return Response.json(await status());
       case "disconnect":if(user.role!=="owner")return Response.json({error:"Owner only"},{status:403});await disconnect();{const row=await readState();await writeState({...row.payload,settings:{...row.payload.settings,quickBooks:{...row.payload.settings.quickBooks,connected:false,realmId:"",lastSync:"Disconnected"}}},user.email,"settings.quickbooks","QuickBooks disconnected")}return Response.json({ok:true});

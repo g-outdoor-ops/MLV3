@@ -1,6 +1,7 @@
 import type { AppData } from "../../app-data";
 import { userFromRequest } from "../../server/auth";
 import { StateConflictError, readState, writeState } from "../../server/db";
+import { denyStateWrite } from "../../server/authz";
 
 export async function GET(request:Request){
   try{const user=await userFromRequest(request);if(!user)return Response.json({error:"Please sign in"},{status:401});const row=await readState();return Response.json({data:row.payload,version:row.version,updatedAt:row.updated_at})}
@@ -11,6 +12,10 @@ export async function PUT(request:Request){
   try{const user=await userFromRequest(request);if(!user)return Response.json({error:"Please sign in"},{status:401});
     const body=await request.json() as {data:AppData;action?:string;summary?:string;version?:number};
     if(!body.data||!Array.isArray(body.data.customers)||!Array.isArray(body.data.orders))return Response.json({error:"Invalid company data"},{status:400});
+    // Compare against what is actually stored rather than trusting the client's idea of the "before".
+    const current=await readState();
+    const denied=denyStateWrite(user,current.payload,body.data);
+    if(denied)return Response.json({error:denied},{status:403});
     const updatedAt=await writeState(body.data,`${user.name} <${user.email}>`,body.action||"update",body.summary||"Company data updated",body.version);
     const after=await readState();
     return Response.json({ok:true,updatedAt,version:after.version})}
