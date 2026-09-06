@@ -15,7 +15,9 @@ const base={customers:[{id:"c1",name:"Palm Aqua"}],orders:[],workOrders:[],inven
   settings:{company:"EcoForm",warehouseToken:"tok-abc",discountApproval:5}};
 const clone=o=>JSON.parse(JSON.stringify(o));
 let pass=0,fail=0;
-const t=(name,got,want)=>{const ok=(got===null)===(want===null);ok?pass++:fail++;console.log(`${ok?"  ok  ":"  FAIL"} ${name}${ok?"":`  (got ${JSON.stringify(got)})`}`)};
+const t=(name,got,want)=>{const ok=(got===null)===(want===null);
+  if(ok)pass++;else fail++;
+  console.log(`${ok?"  ok  ":"  FAIL"} ${name}${ok?"":`  (got ${JSON.stringify(got)})`}`)};
 
 console.log("\nNormal work must still go through:");
 // Sales takes an order: touches orders, workOrders, inventory.committed, activities, notices.

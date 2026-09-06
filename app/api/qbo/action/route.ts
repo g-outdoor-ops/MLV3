@@ -18,7 +18,11 @@ export async function POST(request:Request){
       case "customer.ensure":if(!body.customer)throw new Error("customer required");return Response.json({qboId:await ensureCustomer(body.customer)});
       case "invoice.create":if(!body.invoice)throw new Error("invoice required");return Response.json(await createInvoice(body.invoice));
       case "invoice.send":if(!body.qboId)throw new Error("qboId required");await sendInvoice(body.qboId,body.email);return Response.json({ok:true});
-      case "payment.create":if(!body.qboId||!body.customerQboId||!body.amount)throw new Error("qboId, customerQboId and amount required");return Response.json({paymentId:await recordPayment(body.qboId,body.customerQboId,body.amount,body.method)});
+      // recordPayment now returns what it actually applied and what is left, having re-checked the
+      // live balance first — so the client reports the truth rather than what it hoped to pay.
+      case "payment.create":{if(!body.qboId||!body.customerQboId||!body.amount)throw new Error("qboId, customerQboId and amount required");
+        const paid=await recordPayment(body.qboId,body.customerQboId,body.amount,body.method);
+        return Response.json({ok:true,...paid});}
       case "sync":{const out:Record<string,{balance:number;total:number}>={};for(const i of body.invoices||[]){try{out[i.id]=await invoiceBalance(i.qboId)}catch(e){console.error("sync",i.id,e)}}return Response.json({balances:out,configured:qboConfigured()})}
       case "import":{
         if(user.role!=="owner")return Response.json({error:"Owner only"},{status:403});

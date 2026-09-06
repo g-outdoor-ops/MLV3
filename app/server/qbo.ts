@@ -48,20 +48,51 @@ export async function ensureItem(name:string,unitPrice:number){if(itemCache.has(
 // ---- invoices ----
 export type InvoiceIn={docNumber:string;customer:CustomerIn;lines:{item:string;quantity:number;rate:number}[];discountPct:number;shipping:number;dueDate:string;memo?:string;email?:string};
 export async function createInvoice(inv:InvoiceIn){
+  // Idempotent by document number. A double-click, a retry after a timeout, or a network hiccup that
+  // hides a response which actually succeeded would otherwise bill the customer twice for the same
+  // invoice. Our document numbers are unique here, so an existing QuickBooks invoice with this number
+  // IS this invoice — return it rather than creating a second one.
+  const existing=await findInvoiceByDocNumber(inv.docNumber);
+  if(existing)return existing;
   const customerId=await ensureCustomer(inv.customer);
   const Line:Record<string,unknown>[]=[];
   for(const l of inv.lines){Line.push({DetailType:"SalesItemLineDetail",Amount:Math.round(l.quantity*l.rate*100)/100,Description:l.item,SalesItemLineDetail:{ItemRef:{value:await ensureItem(l.item,l.rate)},Qty:l.quantity,UnitPrice:l.rate}})}
-  if(inv.shipping>0)Line.push({DetailType:"SalesItemLineDetail",Amount:inv.shipping,Description:"Shipping",SalesItemLineDetail:{ItemRef:{value:await ensureItem("Shipping",0)},Qty:1,UnitPrice:inv.shipping}});
+  // A percentage DiscountLine in QuickBooks applies to every line ABOVE it, so the discount must come
+  // before shipping. With the old order the customer's discount was silently applied to the freight
+  // charge too, and the QuickBooks total then disagreed with the total shown here.
   if(inv.discountPct>0)Line.push({DetailType:"DiscountLineDetail",Amount:0,DiscountLineDetail:{PercentBased:true,DiscountPercent:inv.discountPct}});
+  if(inv.shipping>0)Line.push({DetailType:"SalesItemLineDetail",Amount:inv.shipping,Description:"Shipping",SalesItemLineDetail:{ItemRef:{value:await ensureItem("Shipping",0)},Qty:1,UnitPrice:inv.shipping}});
   const body:Record<string,unknown>={CustomerRef:{value:customerId},DocNumber:inv.docNumber,DueDate:inv.dueDate,Line,CustomerMemo:inv.memo?{value:inv.memo}:undefined,BillEmail:inv.email?{Address:inv.email}:undefined,AllowOnlineCreditCardPayment:true,AllowOnlineACHPayment:true};
   const r=await api<{Invoice:{Id:string;DocNumber:string;TotalAmt:number;Balance:number}}>("POST","invoice",body);
   await audit("quickbooks","qbo.invoice",`${inv.docNumber} → QuickBooks invoice ${r.Invoice.Id}`);
   return {qboId:String(r.Invoice.Id),docNumber:String(r.Invoice.DocNumber),total:Number(r.Invoice.TotalAmt),balance:Number(r.Invoice.Balance),customerId}}
+// Find an invoice QuickBooks already holds under one of our document numbers.
+export async function findInvoiceByDocNumber(docNumber:string){
+  if(!docNumber)return null;
+  const sql=`SELECT * FROM Invoice WHERE DocNumber = '${String(docNumber).replace(/'/g,"''")}'`;
+  const res=await api<{QueryResponse?:{Invoice?:Record<string,unknown>[]}}>("GET",`query?query=${encodeURIComponent(sql)}`);
+  const r=res.QueryResponse?.Invoice?.[0];
+  if(!r)return null;
+  return {qboId:String(r.Id),docNumber:String(r.DocNumber||docNumber),total:Number(r.TotalAmt||0),balance:Number(r.Balance||0),
+    customerId:String((r.CustomerRef as Record<string,unknown>|undefined)?.value||""),existing:true as const};
+}
 export async function sendInvoice(qboId:string,email?:string){await api("POST",`invoice/${qboId}/send${email?`?sendTo=${encodeURIComponent(email)}`:""}`);await audit("quickbooks","qbo.send",`invoice ${qboId} emailed`)}
 export async function invoiceBalance(qboId:string){const r=await api<{Invoice:{Balance:number;TotalAmt:number;EmailStatus?:string;LinkedTxn?:unknown[]}}>("GET",`invoice/${qboId}`);return {balance:Number(r.Invoice.Balance),total:Number(r.Invoice.TotalAmt),emailStatus:r.Invoice.EmailStatus}}
 
 // ---- payments ----
-export async function recordPayment(qboInvoiceId:string,customerQboId:string,amount:number,method?:string){const body:Record<string,unknown>={CustomerRef:{value:customerQboId},TotalAmt:amount,Line:[{Amount:amount,LinkedTxn:[{TxnId:qboInvoiceId,TxnType:"Invoice"}]}],PrivateNote:method?`Recorded in MakeLogic · ${method}`:"Recorded in MakeLogic"};const r=await api<{Payment:{Id:string}}>("POST","payment",body);await audit("quickbooks","qbo.payment",`payment ${r.Payment.Id} on invoice ${qboInvoiceId}`);return String(r.Payment.Id)}
+export async function recordPayment(qboInvoiceId:string,customerQboId:string,amount:number,method?:string){
+  // Check what is actually outstanding immediately before taking money. This is the real protection
+  // against a double-click or a retry: the second attempt finds a zero balance and is refused, rather
+  // than posting a second payment against an invoice that is already settled. It also stops an
+  // overpayment when the caller sends the invoice total instead of the remaining balance.
+  const {balance}=await invoiceBalance(qboInvoiceId);
+  if(balance<=0.005)throw new Error("That invoice is already paid in full in QuickBooks — nothing left to record.");
+  const amt=Math.round(Math.min(amount,balance)*100)/100;
+  if(amt<=0)throw new Error("Enter an amount greater than zero.");
+  const body:Record<string,unknown>={CustomerRef:{value:customerQboId},TotalAmt:amt,Line:[{Amount:amt,LinkedTxn:[{TxnId:qboInvoiceId,TxnType:"Invoice"}]}],PrivateNote:method?`Recorded in MakeLogic · ${method}`:"Recorded in MakeLogic"};
+  const r=await api<{Payment:{Id:string}}>("POST","payment",body);
+  await audit("quickbooks","qbo.payment",`payment ${r.Payment.Id} of ${amt} on invoice ${qboInvoiceId}`);
+  return {paymentId:String(r.Payment.Id),applied:amt,remaining:Math.round((balance-amt)*100)/100}}
 
 // ---------------------------------------------------------------------------
 // Import FROM QuickBooks

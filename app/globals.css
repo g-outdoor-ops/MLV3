@@ -14,3 +14,14 @@
 .doc-totals .grand{border-top:1px solid #e3e8e4;margin-top:5px;padding-top:7px;font-size:1rem}
 .doc-totals .grand b{font-weight:800}
 .doc-totals .due b{color:#b3261e}
+
+/* Recording a payment — an inline panel rather than a browser prompt, so a cancel really cancels and
+   a part payment is possible. */
+.pay-panel{margin:14px 0;border:1px solid #cddbd2;border-radius:10px;background:#f7fbf8;padding:12px 14px}
+.pay-panel h4{margin:0 0 10px;font-size:.82rem;text-transform:uppercase;letter-spacing:.06em;color:#4a5a50}
+.pay-panel label{display:block;margin-bottom:9px;font-size:.85rem;color:#4a5a50}
+.pay-panel input,.pay-panel select{width:100%;margin-top:4px;padding:9px 10px;border:1px solid #cddbd2;border-radius:8px;font-size:1rem;background:#fff}
+.pay-note{margin:2px 0 10px;font-size:.82rem;color:#6d7a70}
+.pay-actions{display:flex;gap:8px}
+.pay-actions button{flex:1;padding:10px;border-radius:8px;font-weight:700;cursor:pointer}
+.pay-actions button:disabled{opacity:.6;cursor:default}

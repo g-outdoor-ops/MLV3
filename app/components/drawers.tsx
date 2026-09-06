@@ -6,6 +6,10 @@ import { qboCall } from "./auth";
 
 export function RecordDrawer({id,close}:{id:string;close:()=>void}){
   const {data,commit,notify,setModal,openRecord,role,user}=useApp();
+  const [payOpen,setPayOpen]=useState(false);
+  const [payAmount,setPayAmount]=useState(0);
+  const [payMethod,setPayMethod]=useState("check");
+  const [paying,setPaying]=useState(false);
   const doc=data.documents.find(x=>x.id===id);const order=data.orders.find(x=>x.id===id);const work=data.workOrders.find(x=>x.id===id);const po=(data.purchaseOrders||[]).find(x=>x.id===id);
   const customer=data.customers.find(x=>x.id===(doc?.customerId||order?.customerId||data.orders.find(o=>o.id===work?.orderId)?.customerId));
   const owner=role==="owner";
@@ -62,8 +66,34 @@ export function RecordDrawer({id,close}:{id:string;close:()=>void}){
   else if(doc){
     eyebrow=doc.kind==="quote"?"Quote / estimate":"Invoice";heading=`${doc.id} · ${customer?.name||""}`;status=doc.status;
     const total=documentTotal(doc);
-    const payInvoice=async()=>{let pid="";if(doc.qboId&&customer?.qboId){try{const r=await qboCall({op:"payment.create",qboId:doc.qboId,customerQboId:customer.qboId,amount:total,method:window.prompt("How was it paid? (check, ACH, card, cash)","check")||"payment"});pid=String(r.paymentId||"")}catch(e){notify(`QuickBooks: ${e instanceof Error?e.message:"payment failed"}`,"Invoices",true);return}}
-      act(v=>({...v,documents:v.documents.map(x=>x.id===doc.id?{...x,status:"Paid",paid:total,paymentQboId:pid||x.paymentQboId}:x),orders:v.orders.map(o=>o.invoiceId===doc.id?{...o,stage:6,status:"Paid",payment:"Paid"}:o),customers:v.customers.map(x=>x.id===doc.customerId?{...x,balance:Math.max(0,x.balance-total)}:x),activities:[activity(doc.customerId,"Payment received",`${doc.id} · ${usd2(total)}`),...v.activities]}),"invoice.payment",`${doc.id} paid`,`Payment received — ${doc.id} · ${usd2(total)}${pid?" · recorded in QuickBooks":""}`,"Invoices",true)};
+    // Recording a payment used to send the invoice TOTAL and ask for the method through window.prompt,
+    // where pressing Cancel still recorded the payment. On a part-paid invoice that overpaid the
+    // customer, and there was no busy state, so a double-click posted twice against live books.
+    const payInvoice=async()=>{
+      const amt=Math.round(Math.min(Math.max(0,payAmount),dbal)*100)/100;
+      if(amt<=0){notify("Enter an amount greater than zero","Invoices",true);return}
+      if(paying)return;                       // a second click while the first is in flight
+      setPaying(true);
+      let pid="";let applied=amt;let remaining=Math.round((dbal-amt)*100)/100;
+      if(doc.qboId&&customer?.qboId){
+        try{const r=await qboCall({op:"payment.create",qboId:doc.qboId,customerQboId:customer.qboId,amount:amt,method:payMethod}) as {paymentId?:string;applied?:number;remaining?:number};
+          pid=String(r.paymentId||"");
+          // Trust the server's figures — it checked the live balance before taking anything.
+          if(typeof r.applied==="number")applied=r.applied;
+          if(typeof r.remaining==="number")remaining=r.remaining;
+        }catch(e){setPaying(false);notify(`QuickBooks: ${e instanceof Error?e.message:"payment failed"}`,"Invoices",true);return}
+      }
+      const settled=remaining<=0.005;
+      act(v=>({...v,
+        documents:v.documents.map(x=>x.id===doc.id?{...x,status:settled?"Paid":"Open",paid:Math.round(((x.paid||0)+applied)*100)/100,balance:remaining,paymentQboId:pid||x.paymentQboId}:x),
+        // Only close the order when the invoice is actually settled. A part payment leaves it open.
+        orders:settled?v.orders.map(o=>o.invoiceId===doc.id?{...o,stage:6,status:"Paid",payment:"Paid"}:o):v.orders,
+        customers:v.customers.map(x=>x.id===doc.customerId?{...x,balance:Math.max(0,Math.round((x.balance-applied)*100)/100)}:x),
+        activities:[activity(doc.customerId,settled?"Payment received":"Part payment received",`${doc.id} · ${usd2(applied)}${settled?"":` · ${usd2(remaining)} still due`}`),...v.activities]}),
+        "invoice.payment",`${doc.id} ${settled?"paid":"part paid"}`,
+        `${settled?"Payment":"Part payment"} received — ${doc.id} · ${usd2(applied)}${settled?"":` · ${usd2(remaining)} still due`}${pid?" · recorded in QuickBooks":""}`,"Invoices",true);
+      setPaying(false);setPayOpen(false);
+    };
     const sendDoc=async()=>{if(!doc.qboId){notify(data.settings.quickBooks.connected?"This invoice isn't in QuickBooks yet":"Connect QuickBooks to email invoices with a Pay Now link","Invoices");return}try{await qboCall({op:"invoice.send",qboId:doc.qboId,email:customer?.email});notify(`Invoice emailed from QuickBooks to ${customer?.email||customer?.name}`,"Invoices")}catch(e){notify(`QuickBooks: ${e instanceof Error?e.message:"send failed"}`,"Invoices",true)}};
     // Duplicate for a reorder. Copies the customer and every line onto a fresh invoice dated today,
     // and deliberately does NOT carry over the QuickBooks ids, payment or balance — those belong to the
@@ -106,6 +136,16 @@ export function RecordDrawer({id,close}:{id:string;close:()=>void}){
             <div className={dbal>0?"due":""}><span>Balance due</span><b>{usd2(dbal)}</b></div></>}
         </div>
       </div>
+      {payOpen&&<div className="pay-panel">
+        <h4>Record a payment</h4>
+        <label>Amount<input type="number" step="0.01" min="0" max={dbal} value={payAmount} onChange={e=>setPayAmount(Number(e.target.value))}/></label>
+        <label>How was it paid<select value={payMethod} onChange={e=>setPayMethod(e.target.value)}>{["check","ACH","card","cash","other"].map(m=><option key={m} value={m}>{m}</option>)}</select></label>
+        <p className="pay-note">Balance due {usd2(dbal)}. Leave the amount as it is for payment in full, or lower it for a part payment.</p>
+        <div className="pay-actions">
+          <button className="secondary" onClick={()=>setPayOpen(false)} disabled={paying}>Cancel</button>
+          <button className="primary" onClick={payInvoice} disabled={paying}>{paying?"Recording…":`Record ${usd2(Math.min(Math.max(0,payAmount),dbal))}`}</button>
+        </div>
+      </div>}
       {doc.orderId&&<DetailField label="Order" value={doc.orderId}/>}
       {doc.note&&<DetailField label="Note to customer" value={doc.note}/>}
       {doc.kind==="invoice"&&<DetailField label="QuickBooks" value={doc.qboId?`Invoice #${doc.qboDocNumber||doc.qboId}${doc.source==="quickbooks"?" · imported":""}${doc.paymentQboId?" · payment recorded":""}`:"Not in QuickBooks"}/>}</>;
@@ -114,7 +154,7 @@ export function RecordDrawer({id,close}:{id:string;close:()=>void}){
       {doc.kind==="quote"&&(doc.status==="Draft")&&<button className="secondary" onClick={send}>Email quote</button>}
       {doc.kind==="quote"&&doc.status!=="Accepted"&&doc.status!=="Awaiting approval"&&<button className="primary" onClick={()=>{close();setModal("order",doc.id)}}>Accept &amp; create order</button>}
       {doc.kind==="invoice"&&<button className="secondary" onClick={duplicate}>Duplicate for reorder</button>}
-      {doc.kind==="invoice"&&doc.status!=="Paid"&&<><button className="secondary" onClick={sendDoc}>Email invoice / pay link</button><button className="primary" onClick={payInvoice}>Record payment</button></>}</>;
+      {doc.kind==="invoice"&&doc.status!=="Paid"&&<><button className="secondary" onClick={sendDoc}>Email invoice / pay link</button><button className="primary" onClick={()=>{setPayAmount(dbal);setPayOpen(true)}} disabled={dbal<=0}>Record payment</button></>}</>;
   }
   // ---------------- WORK ORDER ----------------
   else if(work){
