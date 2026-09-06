@@ -81,12 +81,14 @@ export const demoData:AppData={
   {id:"INV-1019",kind:"invoice",customerId:"c2",item:"3-Gallon Bottle · 2 caps",cases:50,quantity:100,rate:8.5,discount:0,shipping:0,status:"Overdue",due:label(-10),paid:0,qbSynced:true},
   {id:"Q-2040",kind:"quote",customerId:"l1",item:"5-Gallon Bottle · 2 caps",cases:150,quantity:300,rate:9.4,discount:0,shipping:45,status:"Draft",due:label(30),paid:0},
  ],
+ // Demo orders sit in the NEW stages directly (stageV2), one per interesting column: money not in yet,
+ // paid and waiting for the floor, on the floor, made, and closed.
  orders:[
-  {id:"SO-1187",customerId:"c3",item:"5-Gallon Bottle · no cap",cases:250,quantity:500,due:label(0),status:"Ready",payment:"Net 30",lines:[{item:"5-Gallon Bottle · no cap",quantity:500,rate:8.2}],shipMethod:"ltl",shipping:312,discount:0,notes:"Ray wants the pallet double-wrapped.",stage:3,rep:"Dad"},
-  {id:"SO-1188",customerId:"c2",item:"3-Gallon Bottle · 2 caps",cases:60,quantity:120,due:label(0),status:"Quality check",payment:"Card on pickup",lines:[{item:"3-Gallon Bottle · 2 caps",quantity:120,rate:8.5}],shipMethod:"pickup",shipping:0,discount:0,notes:"",stage:2,rep:"Dad"},
-  {id:"SO-1189",customerId:"c1",item:"5-Gallon Bottle · 2 caps",cases:150,quantity:300,due:label(2),status:"In production",payment:"Net 30",lines:[{item:"5-Gallon Bottle · 2 caps",quantity:300,rate:9.4}],shipMethod:"truck",shipping:45,discount:0,notes:"Call Carlos the day before.",stage:1,rep:"Dad"},
-  {id:"SO-1190",customerId:"c1",item:"5-Gallon Bottle · 2 caps",cases:150,quantity:300,due:label(-11),status:"Paid",payment:"Paid",lines:[{item:"5-Gallon Bottle · 2 caps",quantity:300,rate:9.4}],shipMethod:"truck",shipping:45,discount:0,stage:6,invoiceId:"INV-1031",rep:"Dad"},
-  {id:"SO-1191",customerId:"c3",item:"5-Gallon Bottle · no cap",cases:350,quantity:700,due:label(-28),status:"Invoiced",payment:"$5,831 due",lines:[{item:"5-Gallon Bottle · no cap",quantity:500,rate:8.2},{item:"5-Gallon Bottle · 2 caps",quantity:200,rate:9.25}],shipMethod:"ltl",shipping:312,discount:2,stage:5,invoiceId:"INV-1027",rep:"Dad"},
+  {id:"SO-1187",customerId:"c3",item:"5-Gallon Bottle · no cap",cases:250,quantity:500,due:label(0),status:STAGES[STAGE_READY],payment:"Paid",lines:[{item:"5-Gallon Bottle · no cap",quantity:500,rate:8.2}],shipMethod:"ltl",shipping:312,discount:0,notes:"Ray wants the pallet double-wrapped.",stage:STAGE_READY,stageV2:true,rep:"Dad"},
+  {id:"SO-1188",customerId:"c2",item:"3-Gallon Bottle · 2 caps",cases:60,quantity:120,due:label(0),status:STAGES[STAGE_PRODUCTION],payment:"Deposit",deposit:400,depositAt:iso(-2),lines:[{item:"3-Gallon Bottle · 2 caps",quantity:120,rate:8.5}],shipMethod:"pickup",shipping:0,discount:0,notes:"",stage:STAGE_PRODUCTION,stageV2:true,rep:"Dad"},
+  {id:"SO-1189",customerId:"c1",item:"5-Gallon Bottle · 2 caps",cases:150,quantity:300,due:label(2),status:STAGES[STAGE_PAID],payment:"Paid",lines:[{item:"5-Gallon Bottle · 2 caps",quantity:300,rate:9.4}],shipMethod:"truck",shipping:45,discount:0,notes:"Call Carlos the day before.",stage:STAGE_PAID,stageV2:true,rep:"Dad"},
+  {id:"SO-1190",customerId:"c1",item:"5-Gallon Bottle · 2 caps",cases:150,quantity:300,due:label(-11),status:STAGES[STAGE_DONE],payment:"Paid",lines:[{item:"5-Gallon Bottle · 2 caps",quantity:300,rate:9.4}],shipMethod:"truck",shipping:45,discount:0,stage:STAGE_DONE,stageV2:true,invoiceId:"INV-1031",rep:"Dad"},
+  {id:"SO-1191",customerId:"c3",item:"5-Gallon Bottle · no cap",cases:350,quantity:700,due:label(-28),status:STAGES[STAGE_INVOICED],payment:"$5,831 due",lines:[{item:"5-Gallon Bottle · no cap",quantity:500,rate:8.2},{item:"5-Gallon Bottle · 2 caps",quantity:200,rate:9.25}],shipMethod:"ltl",shipping:312,discount:2,stage:STAGE_INVOICED,stageV2:true,invoiceId:"INV-1027",rep:"Dad"},
  ],
  workOrders:[
   {id:"WO-116",orderId:"SO-1187",item:"5-Gallon Bottle · no cap",quantity:500,good:500,scrap:11,packed:500,date:iso(0),status:"Done",purpose:"Palm Aqua Delivery order",line:"Line 1",days:1,qcResult:"pass"},
@@ -183,7 +185,10 @@ export function normalize(d:AppData):AppData{
   const s=d.settings||seedData.settings;
   return {...d,
     customers:(d.customers||[]).map(c=>({...c,prices:c.prices||{},qb:c.qb??true})),
-    orders:(d.orders||[]).map(o=>({...o,stage:migrateStage(o),discount:o.discount||0,shipMethod:o.shipMethod||"pickup",notes:o.notes||""})),
+    // stageV2 has to be set on the NEW object. The spread copies the flag as it was (unset), and
+    // migrateStage only marks the record it was handed, so without this the guard never persisted and
+    // the migration re-ran on every load — dragging live orders backwards a second time.
+    orders:(d.orders||[]).map(o=>({...o,stage:migrateStage(o),stageV2:true,discount:o.discount||0,shipMethod:o.shipMethod||"pickup",notes:o.notes||""})),
     workOrders:(d.workOrders||[]).map(w=>({...w,line:w.line||"Line 1",days:w.days||1})),
     itemRates:(d.itemRates||[]).map(r=>({...r,kind:r.kind||"finished",unitsPerCase:r.unitsPerCase||2,floor:r.floor??Math.round(r.rate*(1-r.discountLimit/100)*100)/100,qcChecks:r.qcChecks||DEFAULT_QC})),
     inventory:(d.inventory||[]).map(i=>({...i,kind:i.kind||(/(preform|cap \(|caps \(|handle|carton|resin)/i.test(i.item)?"raw":"finished")})),
@@ -195,4 +200,49 @@ export function normalize(d:AppData):AppData{
 /** True when the record still holds sample customers (starter or demo data). */
 export const hasDemoData=(d:AppData)=>/pure alkaline/i.test(d.settings?.company||"")||d.customers.some(c=>/\.test$/i.test(c.email))||d.settings?.ownerEmail?.endsWith(".test")===true;
 export const todayIso=()=>new Date().toISOString().slice(0,10);
+
+// ---- dates -----------------------------------------------------------------
+// Dates were stored two different ways: documents raised here saved a year-less display string
+// ("Fri, Sep 5") while invoices imported from QuickBooks saved ISO ("2026-09-05"). Overdue detection
+// did Date.parse(`${due} ${thisYear}`), which produces "2026-09-05 2026" for an imported invoice —
+// NaN — so imported invoices could never be overdue, and a year-less label is genuinely ambiguous
+// across a New Year anyway. Everything is stored ISO now; these helpers read both so existing records
+// keep working.
+const MONTHS=["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+/** Any stored due value → "YYYY-MM-DD", or null when it cannot be understood. */
+export function dueIso(v?:string|null):string|null{
+  if(!v)return null;
+  const s=String(v).trim();
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s))return s;
+  // Legacy label: "Fri, Sep 5" or "Sep 5". No year, so pick the one that puts the date nearest today —
+  // right for a due date within a few months either side, which is what these all are. It is a guess,
+  // and it is only ever applied to records written before dates were stored properly.
+  const m=s.match(/([a-z]{3})[a-z]*\.?\s+(\d{1,2})/i);
+  if(!m)return null;
+  const mo=MONTHS.indexOf(m[1].toLowerCase());const day=Number(m[2]);
+  if(mo<0||!day)return null;
+  const now=new Date();const y=now.getFullYear();
+  let best:string|null=null;let bestGap=Infinity;
+  for(const yy of [y-1,y,y+1]){
+    const d=new Date(Date.UTC(yy,mo,day,12));
+    if(d.getUTCMonth()!==mo)continue;                   // e.g. Feb 30
+    const gap=Math.abs(d.getTime()-now.getTime());
+    if(gap<bestGap){bestGap=gap;best=d.toISOString().slice(0,10)}
+  }
+  return best;
+}
+/** Whole days until the due date. Negative means overdue. null when the date is unreadable. */
+export function dueDays(v?:string|null):number|null{
+  const iso=dueIso(v);if(!iso)return null;
+  const due=new Date(iso+"T12:00:00Z").getTime();
+  const today=new Date(todayIso()+"T12:00:00Z").getTime();
+  return Math.round((due-today)/864e5);
+}
+/** Human display for a stored due value. Unreadable values are shown as they were saved. */
+export function fmtDue(v?:string|null):string{
+  const iso=dueIso(v);
+  if(!iso)return v?String(v):"—";
+  const d=new Date(iso+"T12:00:00Z");
+  return d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",timeZone:"UTC"});
+}
 export const daysFromNow=(n:number)=>{const x=new Date();x.setDate(x.getDate()+n);return x};

@@ -7,23 +7,23 @@
 // team in the loop before and is what went missing.
 //
 // Columns follow the real order of work: quote, invoice, money in, make it, pack it, ship it.
-import { STAGES, STAGE_NOTE, STAGE_OWNER, STAGE_DONE, STAGE_SHIPPED, canStartProduction, documentTotal, fmtDue, dueDays, orderTotals, type OrderRecord } from "../app-data";
+import { STAGES, STAGE_NOTE, STAGE_OWNER, STAGE_NEW, STAGE_INVOICED, STAGE_PAID, STAGE_DONE, canStartProduction, documentTotal, fmtDue, dueDays, orderTotals, type OrderRecord } from "../app-data";
 import { useApp, usd2, num } from "./store";
 
 export const ORDER_FLOW = "Order flow";
 
 export function OrderFlowView(){
-  const {data,openRecord,openCustomer,setModal}=useApp();
+  const {data,openRecord,setModal}=useApp();
   const customer=(id:string)=>data.customers.find(c=>c.id===id);
   const invoiceFor=(o:OrderRecord)=>data.documents.find(d=>d.id===o.invoiceId)||data.documents.find(d=>d.kind==="invoice"&&d.orderId===o.id);
 
   // Finished orders stay out of the way; this board is about live work.
-  const live=data.orders.filter(o=>(o.stage??0)<STAGE_DONE);
-  const byStage=(n:number)=>live.filter(o=>(o.stage??0)===n);
+  const live=data.orders.filter(o=>(o.stage??STAGE_NEW)<STAGE_DONE);
+  const byStage=(n:number)=>live.filter(o=>(o.stage??STAGE_NEW)===n);
 
   // The three things that stall an order, surfaced before the columns so nobody has to hunt.
-  const waitingOnMoney=live.filter(o=>(o.stage??0)<=2&&!canStartProduction(o));
-  const readyToRelease=live.filter(o=>(o.stage??0)===3&&canStartProduction(o));
+  const waitingOnMoney=live.filter(o=>(o.stage??STAGE_NEW)<=STAGE_INVOICED&&!canStartProduction(o));
+  const readyToRelease=live.filter(o=>(o.stage??STAGE_NEW)===STAGE_PAID&&canStartProduction(o));
   const late=live.filter(o=>{const d=dueDays(o.due);return d!=null&&d<0});
 
   const card=(o:OrderRecord)=>{
@@ -34,14 +34,14 @@ export function OrderFlowView(){
     const paid=inv?(inv.paid||0):(o.deposit||0);
     const owed=Math.max(0,Math.round((total-paid)*100)/100);
     const d=dueDays(o.due);
-    const stage=o.stage??0;
+    const stage=o.stage??STAGE_NEW;
     return <button key={o.id} className={`flow-card${d!=null&&d<0?" late":""}`} onClick={()=>openRecord(o.id)}>
       <span className="flow-top"><b>{o.id}</b><em>{usd2(total)}</em></span>
-      <span className="flow-cust" onClick={e=>{e.stopPropagation();if(cust)openCustomer(cust.id)}}>{cust?.name||"—"}</span>
+      <span className="flow-cust">{cust?.name||"—"}</span>
       <span className="flow-meta">{num(o.quantity||o.cases)} × {o.item}</span>
       <span className="flow-meta">Needed {fmtDue(o.due)}{d!=null&&d<0?` · ${-d}d late`:d!=null&&d<=3?" · due soon":""}</span>
-      {owed>0&&stage<=3&&<span className="flow-owed">{paid>0?`${usd2(paid)} in · ${usd2(owed)} still due`:`${usd2(owed)} to collect`}</span>}
-      {stage===3&&canStartProduction(o)&&<span className="flow-go">Ready to release to the floor</span>}
+      {owed>0&&stage<=STAGE_PAID&&<span className="flow-owed">{paid>0?`${usd2(paid)} in · ${usd2(owed)} still due`:`${usd2(owed)} to collect`}</span>}
+      {stage===STAGE_PAID&&canStartProduction(o)&&<span className="flow-go">Ready to release to the floor</span>}
     </button>;
   };
 

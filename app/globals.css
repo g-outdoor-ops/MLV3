@@ -25,3 +25,49 @@
 .pay-actions{display:flex;gap:8px}
 .pay-actions button{flex:1;padding:10px;border-radius:8px;font-weight:700;cursor:pointer}
 .pay-actions button:disabled{opacity:.6;cursor:default}
+
+/* ── Order flow ──────────────────────────────────────────────────────────────
+   The pipeline board. Colour carries one meaning only: who is holding the order
+   up. Money owed is amber, ready-for-the-floor is green, late is red. */
+.flow-alerts{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:18px 0}
+.flow-alert{border:1px solid #dde5e0;border-radius:12px;background:#fff;padding:14px 16px}
+.flow-alert b{display:block;font-size:1.9rem;line-height:1.1;font-variant-numeric:tabular-nums}
+.flow-alert span{display:block;font-size:.86rem;color:#4a5a50;margin-top:2px}
+.flow-alert em{display:block;font-style:normal;font-size:.78rem;color:#7b8880;margin-top:6px}
+.flow-alert.warn{border-color:#e8c98d;background:#fdf8ec}
+.flow-alert.warn b{color:#94620d}
+.flow-alert.go{border-color:#9fce9f;background:#f1f9f1}
+.flow-alert.go b{color:#2f7a34}
+.flow-alert.late{border-color:#e6a9a2;background:#fdf2f0}
+.flow-alert.late b{color:#b3261e}
+
+.flow-board{display:grid;grid-template-columns:repeat(7,minmax(190px,1fr));gap:10px;align-items:start;overflow-x:auto;padding-bottom:8px}
+.flow-col{background:#f4f7f5;border:1px solid #e2e9e4;border-radius:12px;padding:10px;min-height:120px}
+.flow-col-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.flow-col-name{font-weight:800;font-size:.92rem}
+.flow-col-count{background:#fff;border:1px solid #dde5e0;border-radius:20px;padding:1px 9px;font-size:.78rem;font-weight:700;font-variant-numeric:tabular-nums}
+.flow-col-who{display:flex;align-items:center;gap:6px;margin:6px 0 2px;font-size:.74rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#5d6b62}
+.who{width:8px;height:8px;border-radius:50%;background:#9aa8a0;flex:0 0 8px}
+.who-sales{background:#4f7fe9}.who-customer{background:#d9a02b}.who-production{background:#7a52c9}
+.who-warehouse{background:#2f9e6b}.who-done{background:#9aa8a0}
+.flow-col-note{margin:0 0 9px;font-size:.75rem;color:#7b8880;line-height:1.4}
+.flow-col-body{display:flex;flex-direction:column;gap:7px}
+.flow-empty{color:#a3ada7;font-size:.85rem;text-align:center;padding:8px 0;margin:0}
+
+.flow-card{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;background:#fff;border:1px solid #dde5e0;
+  border-left:4px solid #cfdad3;border-radius:10px;padding:10px 11px;cursor:pointer;font:inherit}
+.flow-card:hover{border-color:#9fb3a6}
+.flow-card.late{border-left-color:#b3261e}
+.flow-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.flow-top b{font-size:.9rem}
+.flow-top em{font-style:normal;font-weight:700;font-variant-numeric:tabular-nums;font-size:.86rem}
+.flow-cust{font-size:.86rem;font-weight:600;color:#24406f}
+.flow-meta{font-size:.78rem;color:#6d7a70;line-height:1.35}
+.flow-owed{margin-top:5px;font-size:.76rem;font-weight:700;color:#94620d;background:#fdf8ec;border-radius:6px;padding:3px 6px}
+.flow-go{margin-top:5px;font-size:.76rem;font-weight:700;color:#2f7a34;background:#f1f9f1;border-radius:6px;padding:3px 6px}
+.flow-foot{margin-top:14px;font-size:.82rem;color:#7b8880}
+
+/* On a narrow screen the board becomes a single readable column rather than a
+   sideways scroll nobody uses on a phone. */
+@media(max-width:1100px){.flow-board{grid-template-columns:repeat(4,minmax(180px,1fr))}}
+@media(max-width:760px){.flow-board{grid-template-columns:1fr}.flow-col{min-height:0}}

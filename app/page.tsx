@@ -5,6 +5,7 @@ import { AppContext, Toast, type AppContextValue, type Modal, type Role } from "
 import { SalesView, salesNav } from "./components/sales";
 import { OwnerView, ownerGroups } from "./components/owner";
 import { FloorView, floorNav } from "./components/floor";
+import { OrderFlowView, ORDER_FLOW } from "./components/orderflow";
 import { ModalHost } from "./components/modals";
 import { CustomerProfileDrawer, NotificationCenter, RecordDrawer } from "./components/drawers";
 import { SignIn, authCall, type AuthUser } from "./components/auth";
@@ -73,7 +74,7 @@ export default function Home(){
       <div className={role==="floor"?"floor-app":"app-layout"}>
         <SideNav role={role} nav={currentNav} setNav={goNav}/>
         <section className={role==="floor"?"floor-workspace":"workspace"}>
-          {!loaded?<p className="intro">Loading company records…</p>:currentNav==="My account"?<SalesView nav="My account"/>:role==="sales"?<SalesView nav={currentNav}/>:role==="owner"?<OwnerView nav={currentNav}/>:<FloorView nav={currentNav} line={currentLine} setLine={setLine}/>}
+          {!loaded?<p className="intro">Loading company records…</p>:currentNav===ORDER_FLOW?<OrderFlowView/>:currentNav==="My account"?<SalesView nav="My account"/>:role==="sales"?<SalesView nav={currentNav}/>:role==="owner"?<OwnerView nav={currentNav}/>:<FloorView nav={currentNav} line={currentLine} setLine={setLine}/>}
         </section>
       </div>
     </main>

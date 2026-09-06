@@ -1,6 +1,6 @@
 "use client";
 import { useState, type ChangeEvent, type FormEvent } from "react";
-import { DEFAULT_QC, DEFAULT_SHIP, daysFromNow, fmtDay, freeStock, orderTotals, todayIso, type Customer, type DocumentRecord, type OrderLine, type OrderRecord, type WorkOrder } from "../app-data";
+import { DEFAULT_QC, DEFAULT_SHIP, STAGE_NEW, daysFromNow, fmtDay, freeStock, orderTotals, todayIso, type Customer, type DocumentRecord, type OrderLine, type OrderRecord, type WorkOrder } from "../app-data";
 import { CrmSection, nextId, now, num, uid, useApp, usd2, type Modal } from "./store";
 import { qboCall } from "./auth";
 
@@ -29,7 +29,9 @@ export function OrderModal({kind,close,presetCustomer,fromQuote}:{kind:"order"|"
   const needsApproval=disc>limit||underFloor.length>0;
   const short=priced.filter(l=>{const row=data.inventory.find(i=>i.item===l.item);return row&&l.quantity>freeStock(row)});
   const setLine=(i:number,patch:Partial<OrderLine>)=>setLines(ls=>ls.map((l,k)=>k===i?{...l,...patch,...(patch.item?{rate:0}:{})}:l));
-  const dueLabel=fmtDay(new Date(due+"T12:00:00"));
+  // Store the ISO date. Display formatting happens at render time via fmtDue, so overdue detection has
+  // an unambiguous date to work from instead of a year-less string.
+  const dueLabel=due;
 
   const [saving,setSaving]=useState(false);
   const submit=async(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();if(!cust||!priced.length)return;
@@ -37,7 +39,7 @@ export function OrderModal({kind,close,presetCustomer,fromQuote}:{kind:"order"|"
     try{
     if(kind==="order"){
       const id=nextId("SO-",data.orders.map(o=>o.id),1187);
-      const rec:OrderRecord={id,customerId:cust.id,item:priced.map(l=>l.item).join(" + "),cases:t.cases,quantity:draft.quantity,due:dueLabel,status:needsApproval?"Needs approval":"Confirmed",payment:cust.terms,lines:priced,shipMethod:ship,shipping:t.ship,discount:disc,notes,invoiceNote:custNote,stage:0,rep:user,createdAt:new Date().toISOString()};
+      const rec:OrderRecord={id,customerId:cust.id,item:priced.map(l=>l.item).join(" + "),cases:t.cases,quantity:draft.quantity,due:dueLabel,status:needsApproval?"Needs approval":"Confirmed",payment:cust.terms,lines:priced,shipMethod:ship,shipping:t.ship,discount:disc,notes,invoiceNote:custNote,stage:STAGE_NEW,stageV2:true,rep:user,createdAt:new Date().toISOString()};
       const newWOs:WorkOrder[]=short.map((l,i)=>{const row=data.inventory.find(x=>x.item===l.item)!;const need=l.quantity-Math.max(0,freeStock(row));return {id:`WO-${parseInt(nextId("WO-",data.workOrders.map(w=>w.id),116).slice(3),10)+i}`,orderId:id,item:l.item,quantity:Math.ceil(need/100)*100+100,good:0,scrap:0,packed:0,date:todayIso(),status:"Needs scheduling",purpose:`${cust.name} order`,line:data.settings.lines?.[0]||"Line 1",days:1}});
       commit(v=>({...v,orders:[rec,...v.orders],workOrders:[...v.workOrders,...newWOs],
         inventory:v.inventory.map(row=>{const l=priced.find(x=>x.item===row.item);return l?{...row,committed:row.committed+l.quantity}:row}),
@@ -91,7 +93,9 @@ export function WorkOrderModal({close,forOrder}:{close:()=>void;forOrder?:string
   const order=data.orders.find(o=>o.id===forOrder);
   const submit=(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget);const id=nextId("WO-",data.workOrders.map(w=>w.id),116);const item=String(f.get("item"));
     const wo:WorkOrder={id,orderId:order?.id,item,quantity:Number(f.get("quantity"))||0,good:0,scrap:0,packed:0,date:String(f.get("date")),status:"Scheduled",purpose:order?`${data.customers.find(c=>c.id===order.customerId)?.name} order`:String(f.get("purpose")||"Build stock"),line:String(f.get("line")),days:Number(f.get("days"))||1};
-    commit(v=>({...v,workOrders:[...v.workOrders,wo],orders:order?v.orders.map(o=>o.id===order.id&&(o.stage??0)<1?{...o,stage:1,status:"In production"}:o):v.orders}),"workorder.create",`${id} scheduled`);notify(`Work order created — ${id} on ${wo.line}`,"Work orders");close();openRecord(id)};
+    // Scheduling a run is not starting one. The order moves to In production when the floor presses
+    // start, which is also where the money gate is checked.
+    commit(v=>({...v,workOrders:[...v.workOrders,wo]}),"workorder.create",`${id} scheduled`);notify(`Work order created — ${id} on ${wo.line}`,"Work orders");close();openRecord(id)};
   return <Shell title={order?`Work order for ${order.id}`:"Create work order"} eyebrow="Production" onSubmit={submit} close={close} submitLabel="Create & schedule"><div className="form-grid">
     {!order&&<label>Purpose<select name="purpose"><option>Build stock</option><option>Customer order</option><option>Samples / trial</option></select></label>}
     <label>Bottle<select name="item" defaultValue={order?order.lines?.[0]?.item:undefined}>{finished.map(x=><option key={x.id}>{x.item}</option>)}</select></label>
