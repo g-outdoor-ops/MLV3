@@ -9,7 +9,7 @@ export type DocumentRecord={id:string;kind:"quote"|"invoice";customerId:string;i
   // must never be recomputed — see documentTotal.
   lines?:OrderLine[];total?:number;balance?:number;txnDate?:string;source?:"quickbooks"};
 export type OrderLine={item:string;quantity:number;rate:number};
-export type OrderRecord={id:string;customerId:string;item:string;cases:number;quantity:number;due:string;status:string;payment:string;
+export type OrderRecord={stageV2?:boolean;id:string;customerId:string;item:string;cases:number;quantity:number;due:string;status:string;payment:string;deposit?:number;depositAt?:string;
   lines?:OrderLine[];shipMethod?:string;shipping?:number;discount?:number;notes?:string;invoiceNote?:string;stage?:number;invoiceId?:string;rep?:string;createdAt?:string};
 export type QcCheck={label:string;result:boolean|null};
 export type WorkOrder={id:string;orderId?:string;item:string;quantity:number;good:number;scrap:number;packed:number;date:string;status:string;purpose:string;line?:string;days?:number;qc?:QcCheck[];qcNote?:string;qcResult?:"pass"|"hold"|"scrap"|null};
@@ -25,7 +25,29 @@ export type PurchaseOrder={id:string;supplier:string;item:string;quantity:number
 export type AppData={customers:Customer[];documents:DocumentRecord[];orders:OrderRecord[];workOrders:WorkOrder[];calendar:CalendarEvent[];notices:Notice[];activities:Activity[];roles:RoleSetting[];itemRates:ItemRate[];inventory:InventoryRow[];maintenance?:MaintenanceItem[];purchaseOrders?:PurchaseOrder[];
   settings:{company:string;ownerName:string;ownerEmail:string;warehouseToken:string;lines?:string[];shipMethods?:ShipMethod[];discountApproval?:number;monthlyExpenses?:number;cashOnHand?:number;quickBooks:{connected:boolean;realmId:string;lastSync:string;customers:boolean;invoices:boolean;quotes:boolean;conflicts:number}}};
 
-export const STAGES=["Placed","In production","Quality check","Ready","Shipped","Invoiced","Paid"] as const;
+// The stages the shop actually works in. The old list ran Placed → In production → … → Invoiced →
+// Paid, i.e. make first and bill last, which is backwards for this business: nothing goes on a machine
+// until a deposit or full payment has landed. Every board, badge and gate reads this order, so having
+// it wrong is why the Airtable flow never came back.
+export const STAGES=["New","Quoted","Invoiced","Paid","In production","Ready to pack","Shipped","Done"] as const;
+export const STAGE_NEW=0,STAGE_QUOTED=1,STAGE_INVOICED=2,STAGE_PAID=3,STAGE_PRODUCTION=4,STAGE_READY=5,STAGE_SHIPPED=6,STAGE_DONE=7;
+
+// Who is waiting on each stage, so one glance answers "whose move is it?".
+export const STAGE_OWNER:Record<number,"Sales"|"Customer"|"Production"|"Warehouse"|"Done">={
+  0:"Sales",1:"Customer",2:"Customer",3:"Production",4:"Production",5:"Warehouse",6:"Warehouse",7:"Done"};
+export const STAGE_NOTE:Record<number,string>={
+  0:"Taken, not yet quoted or invoiced",
+  1:"Quote sent — waiting for the customer to approve",
+  2:"Invoice sent — waiting for a deposit or payment in full",
+  3:"Paid or deposit received — ready to release to the floor",
+  4:"On the floor being made",
+  5:"Made and waiting to be packed",
+  6:"Shipped — collect any balance still due",
+  7:"Complete"};
+
+// Production is gated on money, not on someone remembering. A deposit is enough to start.
+export const canStartProduction=(o:{deposit?:number;payment?:string})=>
+  (o.deposit||0)>0||o.payment==="Paid"||o.payment==="Deposit";
 export const DEFAULT_QC=["Weight within spec","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish gauge","Handle pull test"];
 export const DEFAULT_SHIP:ShipMethod[]=[
   {id:"pickup",name:"Customer picks up",sub:"Miami warehouse, Mon–Fri 8–4",rate:0},
@@ -140,6 +162,18 @@ export const int=(n:number)=>Math.round(n).toLocaleString("en-US");
 // Orders saved by the earlier UI priced by the case; show them that way rather than re-pricing per bottle.
 export const orderLines=(o:OrderRecord,rates:ItemRate[]):OrderLine[]=>o.lines&&o.lines.length?o.lines:[{item:`${o.item} · case`,quantity:o.cases||o.quantity,rate:rates.find(r=>r.item===o.item)?.rate??0}];
 export function orderTotals(o:OrderRecord,data:AppData){const lines=orderLines(o,data.itemRates);const sub=lines.reduce((a,l)=>a+l.quantity*l.rate,0);const disc=sub*(o.discount||0)/100;const sm=(data.settings.shipMethods||DEFAULT_SHIP).find(s=>s.id===o.shipMethod);const cases=lines.reduce((a,l)=>a+Math.ceil(l.quantity/(data.itemRates.find(r=>r.item===l.item)?.unitsPerCase||2)),0);const ship=o.shipping!=null?o.shipping:sm?(sm.perCase?sm.perCase*cases:sm.rate):0;return {lines,sub,disc,ship,cases,total:Math.round((sub-disc+ship)*100)/100}}
+// Orders saved under the old seven-stage list hold a number that now means something different.
+// Old: 0 Placed, 1 In production, 2 Quality check, 3 Ready, 4 Shipped, 5 Invoiced, 6 Paid.
+// Old 5 and 6 came AFTER shipping, so they map forward to Shipped/Done rather than back to Invoiced —
+// an order that was invoiced under the old flow had already been made and sent.
+const OLD_TO_NEW:Record<number,number>={0:STAGE_NEW,1:STAGE_PRODUCTION,2:STAGE_PRODUCTION,3:STAGE_READY,4:STAGE_SHIPPED,5:STAGE_SHIPPED,6:STAGE_DONE};
+export function migrateStage(o:OrderRecord):number{
+  if(o.stageV2)return o.stage??STAGE_NEW;              // already migrated
+  const old=o.stage!=null?o.stage:Math.max(0,["placed","in production","quality check","ready","shipped","invoiced","paid"].indexOf(String(o.status||"").toLowerCase()));
+  const mapped=OLD_TO_NEW[old]??STAGE_NEW;
+  o.stageV2=true;
+  return mapped;
+}
 export const stageOf=(o:OrderRecord)=>o.stage!=null?o.stage:Math.max(0,STAGES.findIndex(s=>s.toLowerCase()===o.status.toLowerCase()));
 export const freeStock=(row:InventoryRow)=>row.onHand-row.committed;
 export const fmtDay=(d:Date)=>d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
@@ -149,7 +183,7 @@ export function normalize(d:AppData):AppData{
   const s=d.settings||seedData.settings;
   return {...d,
     customers:(d.customers||[]).map(c=>({...c,prices:c.prices||{},qb:c.qb??true})),
-    orders:(d.orders||[]).map(o=>({...o,stage:stageOf(o),discount:o.discount||0,shipMethod:o.shipMethod||"pickup",notes:o.notes||""})),
+    orders:(d.orders||[]).map(o=>({...o,stage:migrateStage(o),discount:o.discount||0,shipMethod:o.shipMethod||"pickup",notes:o.notes||""})),
     workOrders:(d.workOrders||[]).map(w=>({...w,line:w.line||"Line 1",days:w.days||1})),
     itemRates:(d.itemRates||[]).map(r=>({...r,kind:r.kind||"finished",unitsPerCase:r.unitsPerCase||2,floor:r.floor??Math.round(r.rate*(1-r.discountLimit/100)*100)/100,qcChecks:r.qcChecks||DEFAULT_QC})),
     inventory:(d.inventory||[]).map(i=>({...i,kind:i.kind||(/(preform|cap \(|caps \(|handle|carton|resin)/i.test(i.item)?"raw":"finished")})),
