@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { normalize, seedData, type AppData } from "./app-data";
 import { AppContext, Toast, type AppContextValue, type Modal, type Role } from "./components/store";
 import { SalesView, salesNav } from "./components/sales";
@@ -14,6 +14,9 @@ export default function Home(){
   const[auth,setAuth]=useState<{user:AuthUser|null;needsSetup:boolean;checked:boolean}>({user:null,needsSetup:false,checked:false});
   const[data,setData]=useState<AppData>(()=>normalize(seedData));
   const[loaded,setLoaded]=useState(false);
+  // The company-record version this client last saw. Sent with every save so the server can reject a
+  // write built on stale data rather than letting it clobber whoever saved first.
+  const versionRef=useRef(0);
   const[nav,setNav]=useState("");
   const[modal,setModalState]=useState<{type:Modal;arg?:string}>({type:null});
   const[toast,setToast]=useState("");
@@ -23,14 +26,34 @@ export default function Home(){
   const[line,setLine]=useState("");
 
   useEffect(()=>{fetch("/api/auth").then(r=>r.json()).then(j=>setAuth({user:j.user||null,needsSetup:!!j.needsSetup,checked:true})).catch(()=>setAuth({user:null,needsSetup:false,checked:true}))},[]);
-  useEffect(()=>{if(!auth.user)return;let live=true;Promise.resolve().then(()=>{if(live)setLoaded(false)});fetch("/api/state").then(r=>r.ok?r.json():Promise.reject()).then(x=>setData(normalize(x.data))).catch(()=>setToast("Working offline — changes will retry")).finally(()=>{if(live)setLoaded(true)});
+  useEffect(()=>{if(!auth.user)return;let live=true;Promise.resolve().then(()=>{if(live)setLoaded(false)});fetch("/api/state").then(r=>r.ok?r.json():Promise.reject()).then(x=>{setData(normalize(x.data));versionRef.current=Number(x.version)||0}).catch(()=>setToast("Working offline — changes will retry")).finally(()=>{if(live)setLoaded(true)});
     const m=new URLSearchParams(window.location.search).get("qbo");if(m){Promise.resolve().then(()=>{if(live)setToast(m==="connected"?"QuickBooks connected":`QuickBooks: ${m}`)});history.replaceState(null,"",window.location.pathname+window.location.hash)}return()=>{live=false}},[auth.user]);
   useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(""),3600);return()=>clearTimeout(t)},[toast]);
 
   const role:Role=auth.user?.role||"sales";
   const home=role==="owner"?"Control center":role==="floor"?"Production":"Dashboard";
   const currentNav=nav||home;
-  const commit=useCallback<AppContextValue["commit"]>((next,action="update",summary="Company data updated")=>{setData(current=>{const resolved=normalize(next(current));fetch("/api/state",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({data:resolved,action,summary})}).then(r=>{if(r.status===401){setToast("Your session ended — please sign in again");setAuth(a=>({...a,user:null}))}else if(!r.ok)setToast("Could not save yet — please try again")}).catch(()=>setToast("Could not save yet — please try again"));return resolved})},[]);
+  // Every save carries the version this client loaded. If someone else saved in the meantime the
+  // server rejects it with 409 rather than letting the last writer silently erase the other's work.
+  // On a conflict the only honest thing to do is reload: this client is holding a whole stale copy of
+  // the company record, so retrying would just overwrite the newer data with the same old blob.
+  const commit=useCallback<AppContextValue["commit"]>((next,action="update",summary="Company data updated")=>{setData(current=>{const resolved=normalize(next(current));
+    fetch("/api/state",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({data:resolved,action,summary,version:versionRef.current})})
+      .then(async r=>{
+        if(r.status===401){setToast("Your session ended — please sign in again");setAuth(a=>({...a,user:null}));return}
+        if(r.status===409){
+          const c=await r.json().catch(()=>({})) as {updatedBy?:string};
+          const who=(c.updatedBy||"Someone else").replace(/\s*<[^>]*>/,"");
+          setToast(`${who} saved changes while you were working — reloading so you don't overwrite them`);
+          if(typeof window!=="undefined")setTimeout(()=>window.location.reload(),2200);
+          return;
+        }
+        if(!r.ok){setToast("Could not save yet — please try again");return}
+        const ok=await r.json().catch(()=>({})) as {version?:number};
+        if(ok.version)versionRef.current=ok.version;   // keep in step for the next save
+      })
+      .catch(()=>setToast("Could not save yet — please try again"));
+    return resolved})},[]);
   const notify=useCallback((text:string,target="Control center",urgent=false)=>{setToast(text);commit(current=>({...current,notices:[{id:`n${Date.now()}`,title:text.split(" — ")[0],detail:text,urgent,read:false,createdAt:"Today · "+new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}),target},...current.notices].slice(0,200)}),"notification",text)},[commit]);
   const setModal=(type:Modal,arg?:string)=>setModalState({type,arg});
   const goNav=(v:string)=>{setNav(v);window.scrollTo(0,0)};

@@ -91,9 +91,11 @@ export async function POST(request:Request){
         const finalCustomers=body.since?customers:customers.map(c=>sales.has(c.id)?{...c,lifetimeSales:Math.round(sales.get(c.id)!)}:c);
 
         const summary=`Imported ${added} new and ${updated} updated customer${added+updated===1?"":"s"}, ${invAdded} new and ${invUpdated} updated invoice${invAdded+invUpdated===1?"":"s"}`;
+        // row.version is the version read before the QuickBooks round trip, which can take a minute.
+        // Passing it means an import that raced someone else's save is rejected rather than erasing it.
         await writeState({...data,customers:finalCustomers,documents,
           settings:{...data.settings,quickBooks:{...data.settings.quickBooks,connected:true,lastSync:new Date().toISOString()}}},
-          user.email,"qbo.import",summary);
+          user.email,"qbo.import",summary,row.version);
         return Response.json({ok:true,company:st.company||"",env:st.env||"",realmId:st.realmId||"",
           customers:{added,updated,total:qCustomers.length},
           invoices:{added:invAdded,updated:invUpdated,total:qInvoices.length,orphaned},summary});

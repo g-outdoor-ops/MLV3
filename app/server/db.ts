@@ -43,7 +43,31 @@ export function getDb(){ready??=connect().catch(e=>{ready=undefined;throw e});re
 export async function readState(){const db=await getDb();const rows=await db.query("SELECT payload,version,updated_at FROM app_state WHERE id='company'");
   if(!rows.length){await db.exec("INSERT INTO app_state(id,payload,version,updated_at,updated_by) VALUES('company',$1,1,$2,$3)",[JSON.stringify(seedData),new Date().toISOString(),"system"]);return {payload:seedData,version:1,updated_at:new Date().toISOString()}}
   const r=rows[0];return {payload:typeof r.payload==="string"?JSON.parse(r.payload as string) as AppData:r.payload as AppData,version:Number(r.version),updated_at:String(r.updated_at)}}
-export async function writeState(data:AppData,actor:string,action:string,summary:string){const db=await getDb();const now=new Date().toISOString();
-  await db.exec("UPDATE app_state SET payload=$1,version=version+1,updated_at=$2,updated_by=$3 WHERE id='company'",[JSON.stringify(data),now,actor]);
+// Raised when someone else saved between the moment this client loaded the company record and the
+// moment it tried to save. Carries the current version so the caller can tell the person what happened.
+export class StateConflictError extends Error{
+  currentVersion:number;updatedBy:string;updatedAt:string;
+  constructor(currentVersion:number,updatedBy:string,updatedAt:string){
+    super("The company record changed since you loaded it");this.name="StateConflictError";
+    this.currentVersion=currentVersion;this.updatedBy=updatedBy;this.updatedAt=updatedAt;
+  }
+}
+
+// Optimistic concurrency. Every client holds a whole copy of the company record and PUTs all of it, so
+// without a version check the last writer silently wins and the other person's work disappears with no
+// error anywhere. The guard is the WHERE clause: the row only updates if its version is still the one
+// the caller read. UPDATE ... RETURNING makes that atomic — checking the version in a separate SELECT
+// first would leave a gap for another write to land in between.
+export async function writeState(data:AppData,actor:string,action:string,summary:string,expectedVersion?:number){const db=await getDb();const now=new Date().toISOString();
+  if(expectedVersion!=null){
+    const updated=await db.query("UPDATE app_state SET payload=$1,version=version+1,updated_at=$2,updated_by=$3 WHERE id='company' AND version=$4 RETURNING version",[JSON.stringify(data),now,actor,expectedVersion]);
+    if(!updated.length){
+      const cur=await db.query("SELECT version,updated_at,updated_by FROM app_state WHERE id='company'");
+      const r=cur[0]||{};
+      throw new StateConflictError(Number(r.version||0),String(r.updated_by||"someone else"),String(r.updated_at||now));
+    }
+  }else{
+    await db.exec("UPDATE app_state SET payload=$1,version=version+1,updated_at=$2,updated_by=$3 WHERE id='company'",[JSON.stringify(data),now,actor]);
+  }
   await db.exec("INSERT INTO audit_events(actor,action,summary,created_at) VALUES($1,$2,$3,$4)",[actor,action,summary,now]);return now}
 export async function audit(actor:string,action:string,summary:string){const db=await getDb();await db.exec("INSERT INTO audit_events(actor,action,summary,created_at) VALUES($1,$2,$3,$4)",[actor,action,summary,new Date().toISOString()])}
