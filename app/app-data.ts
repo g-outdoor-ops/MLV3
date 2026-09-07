@@ -17,7 +17,11 @@ export type CalendarEvent={id:string;day:number;type:"order"|"stock"|"maintenanc
 export type Notice={id:string;title:string;detail:string;urgent:boolean;read:boolean;createdAt:string;target:string};
 export type Activity={id:string;customerId?:string;title:string;detail:string;actor:string;createdAt:string};
 export type RoleSetting={id:string;name:string;members:string[];permissions:Record<string,"none"|"view"|"edit">};
-export type ItemRate={id:string;item:string;rate:number;minimum:number;discountLimit:number;floor?:number;unitsPerCase?:number;kind?:"finished"|"raw";cost?:number;sub?:string;qcChecks?:string[];material?:string};
+// blankId/caps are what let an order line reach the machines: without them the catalogue knows what a
+// bottle costs but not what it is made from, so nothing could turn a wholesale order into production.
+// An empty string means "deliberately not moulded here" (a cap pack, a bought-in item) and is left
+// alone; undefined means nobody has said yet, and inferBlank has a one-time guess at it.
+export type ItemRate={id:string;item:string;rate:number;minimum:number;discountLimit:number;floor?:number;unitsPerCase?:number;kind?:"finished"|"raw";cost?:number;sub?:string;qcChecks?:string[];material?:string;blankId?:string;caps?:AssemblyCap[]};
 export type InventoryRow={id:string;item:string;onHand:number;committed:number;reorder:number;cost:number;kind?:"finished"|"raw";unit?:string;onOrder?:number;eta?:string;usage?:string;supplier?:string};
 
 // ---- what this shop actually makes -------------------------------------------------
@@ -39,6 +43,9 @@ export type Blank={
   sellable?:boolean;                  // sold to wholesale as a plain bottle
 };
 export type AssemblyCap={component:string;qty:number};   // "Screw cap" × 2
+// The two caps this shop fits. They decide the neck, and so the mould: screw caps need a screw-top
+// blank, silicone caps sit on a regular one.
+export const CAP_KINDS=["Screw cap","Silicone cap"];
 export type Sku={
   id:string;name:string;              // "D5-T0WT-Q5XP", "5 Gal + 2 Screw Caps"
   channel:"amazon"|"wholesale"|"both";
@@ -503,6 +510,172 @@ export function planTotals(days:ProdDay[],blanks:Blank[],machines:Machine[]){
 export const stepTargetName=(st:ProdStep,blanks:Blank[],skus:Sku[])=>
   blanks.find(b=>b.id===st.target)?.name||skus.find(x=>x.id===st.target)?.name||st.target;
 
+// ---- turning an accepted order into production -------------------------------------
+// Wholesale orders were the one thing the calendar could not fill in for itself: the plan knew about
+// Amazon replenishment, and someone had to remember to type in the customer work that runs on the same
+// two machines. This is that step, done from the record instead of from memory.
+//
+// An order becomes production when the money is in — the same gate the order flow uses. Planning work
+// for an unpaid order would put it on a machine the shop has not agreed to run, which is the exact
+// habit the money-first stage model was built to break.
+
+const WEEKEND=[0,6];
+export const isWorkday=(iso:string)=>!WEEKEND.includes(new Date(iso+"T12:00:00Z").getUTCDay());
+export const addDays=(iso:string,n:number)=>{const d=new Date(iso+"T12:00:00Z");d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)};
+export const nextWorkday=(iso:string)=>{let d=iso;for(let i=0;i<7&&!isWorkday(d);i++)d=addDays(d,1);return d};
+
+export type OrderNeedLine={item:string;quantity:number;fromStock:number;make:number;blankId?:string;caps:AssemblyCap[]};
+export type OrderNeed={
+  lines:OrderNeedLine[];             // per line: ordered, covered by stock, still to mould
+  blankLoad:Record<string,number>;   // what has to be moulded, after stock
+  caps:Record<string,number>;        // components assembly will eat
+  unplannable:string[];              // lines with no blank set on the catalogue row
+  toMake:number;                     // bottles to mould in total
+};
+
+/**
+ * What an order still needs made. Stock on the shelf counts: an order for 500 plain 5-gallon bottles
+ * when 830 are sitting in the warehouse needs no machine time at all, and planning it anyway would
+ * mould 500 bottles nobody asked for.
+ *
+ * `committed` already counts this order among the promises against that stock, so the order's own
+ * quantity is added back before the shelf is read — otherwise every order would be netted against
+ * itself and the shop would quietly over-produce by exactly the amount it had already promised.
+ */
+export function orderNeeds(o:OrderRecord,data:AppData):OrderNeed{
+  const need:OrderNeed={lines:[],blankLoad:{},caps:{},unplannable:[],toMake:0};
+  for(const line of orderLines(o,data.itemRates)){
+    const rate=data.itemRates.find(r=>r.item===line.item);
+    const row=data.inventory.find(i=>i.item===line.item);
+    const othersPromised=Math.max(0,(row?.committed||0)-line.quantity);
+    const available=Math.max(0,(row?.onHand||0)-othersPromised);
+    const covered=Math.min(line.quantity,available);
+    const make=Math.max(0,line.quantity-covered);
+    const caps=rate?.caps||[];
+    need.lines.push({item:line.item,quantity:line.quantity,fromStock:covered,make,blankId:rate?.blankId||undefined,caps});
+    if(!rate?.blankId){
+      // The catalogue cannot say what this is made from, so nothing is invented — the line is named
+      // instead, and the owner sets the blank on the item rate.
+      if(!need.unplannable.includes(line.item))need.unplannable.push(line.item);
+      continue;
+    }
+    if(!make)continue;
+    need.blankLoad[rate.blankId]=(need.blankLoad[rate.blankId]||0)+make;
+    for(const c of caps)need.caps[c.component]=(need.caps[c.component]||0)+c.qty*make;
+    need.toMake+=make;
+  }
+  return need;
+}
+
+/**
+ * Where an order's work fits. Moulding is placed into whatever a machine has left on each working day
+ * rather than stacked onto one — the plan can already be full of Amazon work, and a scheduler that
+ * ignores that would produce a calendar that looks fine and a month that cannot be run.
+ *
+ * Because it only ever fills free capacity, adding an order never creates an over-capacity day. What it
+ * does instead is push the finish date out, which is the honest answer and the one worth seeing before
+ * the customer is promised anything: `daysLate` says whether the date already given is now a fiction.
+ */
+export function planOrder(o:OrderRecord,data:AppData,from?:string){
+  const blanks=data.blanks?.length?data.blanks:DEFAULT_BLANKS;
+  const machines=data.settings.machines?.length?data.settings.machines:DEFAULT_MACHINES;
+  const need=orderNeeds(o,data);
+  const entries:{date:string;step:ProdStep}[]=[];
+  // Load already on the calendar, plus anything this run has placed, so a big order stacked across
+  // several days does not book the same shift twice.
+  const placed:Record<string,number>={};
+  const key=(date:string,machineId:string)=>`${date}|${machineId}`;
+  for(const day of data.prodDays||[])
+    for(const l of dayLoad(day,blanks,machines))placed[key(day.date,l.machine.id)]=l.units;
+
+  const cursor=nextWorkday(from||todayIso());
+  let lastMould="";
+  let n=0;
+  for(const [blankId,wanted] of Object.entries(need.blankLoad)){
+    const blank=blanks.find(b=>b.id===blankId);
+    const machine=blank&&machines.find(m=>m.makes===blank.size);
+    if(!blank||!machine)continue;                      // nothing can make it; orderNeeds already said so
+    let left=wanted;let day=cursor;
+    for(let guard=0;left>0&&guard<400;guard++,day=nextWorkday(addDays(day,1))){
+      const used=placed[key(day,machine.id)]||0;
+      const free=machine.perShift-used;
+      if(free<=0)continue;
+      const take=Math.min(free,left);
+      placed[key(day,machine.id)]=used+take;
+      entries.push({date:day,step:{id:`${o.id}-m${++n}`,type:"mold",source:"wholesale",target:blankId,qty:take,machineId:machine.id,linkedTo:o.id}});
+      left-=take;
+      if(day>lastMould)lastMould=day;
+    }
+  }
+
+  // Assembly, pallets and the truck follow the last bottle off the machine — one step per line, the way
+  // the Amazon plan carries one per SKU, because a two-product order is two pallets and two things to
+  // count. An order the shelf already covers skips straight to packing: those bottles are made, capped
+  // and waiting.
+  const after=(d:string)=>nextWorkday(addDays(d,1));
+  const assembleDay=lastMould?after(lastMould):nextWorkday(from||todayIso());
+  const capped=need.lines.filter(l=>l.make>0&&l.caps.length);
+  for(const [i,l] of capped.entries())
+    entries.push({date:assembleDay,step:{id:`${o.id}-a${i+1}`,type:"assemble",source:"wholesale",target:l.item,qty:l.make,linkedTo:o.id}});
+  const palletDay=capped.length?after(assembleDay):assembleDay;
+  for(const [i,l] of need.lines.entries())
+    entries.push({date:palletDay,step:{id:`${o.id}-p${i+1}`,type:"palletize",source:"wholesale",target:l.item,qty:l.quantity,linkedTo:o.id}});
+  const ship=after(palletDay);
+  for(const [i,l] of need.lines.entries())
+    entries.push({date:ship,step:{id:`${o.id}-s${i+1}`,type:"ship",source:"wholesale",target:l.item,qty:l.quantity,linkedTo:o.id}});
+
+  const due=dueIso(o.due);
+  const daysLate=due?Math.round((new Date(ship+"T12:00:00Z").getTime()-new Date(due+"T12:00:00Z").getTime())/864e5):null;
+  return {entries,need,finish:ship,daysLate:daysLate!=null&&daysLate>0?daysLate:null};
+}
+
+/** The steps already on the plan for an order. Used to keep planning it twice from being possible. */
+export const plannedFor=(orderId:string,days:ProdDay[])=>
+  days.flatMap(d=>d.steps||[]).filter(s=>s.linkedTo===orderId);
+
+/**
+ * Orders whose work is not on the calendar yet: past the money gate, not yet made, nothing planned.
+ * An order that already has steps is left alone — re-planning around what the floor has started is a
+ * different and much more dangerous operation than adding what was never there.
+ */
+export function ordersToPlan(data:AppData):OrderRecord[]{
+  const days=data.prodDays||[];
+  return data.orders.filter(o=>o.status!=="Needs approval"&&canStartProduction(o)
+    &&stageOf(o)>=STAGE_PAID&&stageOf(o)<STAGE_READY
+    &&!plannedFor(o.id,days).length);
+}
+
+/** Merge loose steps into the plan, creating any day they land on that does not exist yet. */
+export function addSteps(days:ProdDay[],entries:{date:string;step:ProdStep}[]):ProdDay[]{
+  const out=days.map(d=>({...d,steps:[...(d.steps||[])]}));
+  for(const {date,step} of entries){
+    const day=out.find(d=>d.date===date);
+    if(day)day.steps.push(step);else out.push({date,steps:[step]});
+  }
+  return out.sort((a,b)=>a.date.localeCompare(b.date));
+}
+
+/**
+ * One-time guess at the blank behind an existing catalogue row, for records written before the
+ * catalogue could say. It is a guess from the item text and it is meant to be corrected on the Item
+ * rates screen, not trusted forever — which is why it only ever fills a field nobody has set, and why
+ * planning refuses to work from a row it could not resolve rather than inventing something plausible.
+ *
+ * Silicone caps sit on a regular neck and screw caps on a screw neck, which is what decides the mould.
+ */
+export function inferBlank(rate:ItemRate,blanks:Blank[]):{blankId?:string;caps?:AssemblyCap[]}{
+  const text=`${rate.item} ${rate.sub||""} ${rate.material||""}`.toLowerCase();
+  if(!/\bgal/.test(text))return {};                             // cap packs and bought-in items
+  const size=/3\s*-?\s*gal/.test(text)?"3-gal":/5\s*-?\s*gal/.test(text)?"5-gal":null;
+  if(!size)return {};
+  const capCount=/no\s+caps?/.test(text)?0:Number((text.match(/(\d+)\s*(?:screw|silicone)?\s*caps?/)||[])[1]||0);
+  const silicone=/silicone/.test(text);
+  const neck=capCount>0&&!silicone?"screw":"regular";
+  const blank=blanks.find(b=>b.size===size&&b.neck===neck);
+  if(!blank)return {};
+  return {blankId:blank.id,caps:capCount>0?[{component:silicone?"Silicone cap":"Screw cap",qty:capCount}]:[]};
+}
+
 export const fmtDay=(d:Date)=>d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
 
 /** Fill in fields the old UI never saved so the new screens always have what they need. */
@@ -515,7 +688,10 @@ export function normalize(d:AppData):AppData{
     // the migration re-ran on every load — dragging live orders backwards a second time.
     orders:(d.orders||[]).map(o=>({...o,stage:migrateStage(o),stageV2:true,discount:o.discount||0,shipMethod:o.shipMethod||"pickup",notes:o.notes||""})),
     workOrders:(d.workOrders||[]).map(w=>({...w,line:w.line||"Line 1",days:w.days||1})),
-    itemRates:(d.itemRates||[]).map(r=>({...r,kind:r.kind||"finished",unitsPerCase:r.unitsPerCase||2,floor:r.floor??Math.round(r.rate*(1-r.discountLimit/100)*100)/100,qcChecks:r.qcChecks||DEFAULT_QC})),
+    // blankId is only guessed when nobody has answered yet. An owner who sets it to "not moulded here"
+    // stores an empty string, which is an answer and is left alone.
+    itemRates:(d.itemRates||[]).map(r=>({...r,kind:r.kind||"finished",unitsPerCase:r.unitsPerCase||2,floor:r.floor??Math.round(r.rate*(1-r.discountLimit/100)*100)/100,qcChecks:r.qcChecks||DEFAULT_QC,
+      ...(r.blankId===undefined?inferBlank(r,d.blanks?.length?d.blanks:DEFAULT_BLANKS):{})})),
     inventory:(d.inventory||[]).map(i=>({...i,kind:i.kind||(/(preform|cap \(|caps \(|handle|carton|resin)/i.test(i.item)?"raw":"finished")})),
     maintenance:d.maintenance||[],purchaseOrders:d.purchaseOrders||[],
     // The catalogue and the machines are the shop itself, so they are filled in rather than left

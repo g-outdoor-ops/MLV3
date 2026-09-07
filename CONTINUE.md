@@ -17,12 +17,12 @@ to invoicing or payments as touching real money.
 
 ## The state of play
 
-`main` is deployed. Last **pushed** commit: **`4b2ed00`**. `main` is one commit ahead of the remote —
-`8c0bf42` is committed locally and **not pushed**, so it is not live yet.
+`main` is deployed and pushed through **`3af0039`**. There is **uncommitted work in the tree** for
+Phase 3 — wholesale orders planned onto the calendar.
 
 The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
-The production rebuild is `4b2ed00` (Phase 1, model only) and `8c0bf42` (Phase 2, the calendar) — see
-"The production rebuild" below.
+The production rebuild is `4b2ed00` (Phase 1, model), `8c0bf42` (Phase 2, the calendar) and Phase 3 in
+the tree — see "The production rebuild" below.
 
 ### Shipped today (all on `main`)
 
@@ -145,7 +145,7 @@ Blanks, SKUs, the two machines, `guardStepEdit` / `reconcileStep`, and the plann
 (`blanksNeeded`, `capsNeeded`, `mouldDays`). Read that commit message; it explains the shared blank and
 why capacity is never pooled. `tests/production.test.mjs` checks the model against the real catalogue.
 
-### Phase 2 — the mixed production calendar (`8c0bf42`, committed, not pushed)
+### Phase 2 — the mixed production calendar (`8c0bf42`)
 
 `app/components/prodplan.tsx` — **Production plan**, in the owner's Production group and on the floor's
 nav, routed from `page.tsx` the way Order flow is. `data.prodDays` holds `ProdDay[]`; each day holds
@@ -187,13 +187,54 @@ Demo data adds wholesale steps on top (Palm Aqua's 500 plain 5-gallon bottles on
 plan already fills that line) so the over-capacity warning has a real collision to show, plus one
 part-recorded step so the guard and reconcile have something true to protect. The live seed is Amazon only.
 
+### Phase 3 — wholesale orders become production (in the tree, uncommitted)
+
+The calendar can now fill itself in from the record instead of from somebody's memory. A paid order
+appears in a panel at the top of Production plan with what it still needs, where it fits, and the date
+it would actually finish; the owner presses **Add to the plan** and the steps land, tagged
+`source: "wholesale"` and `linkedTo` the order.
+
+- **The money gate decides, not the sales stage.** An order is offered once it is past
+  `canStartProduction` and before it is made — the same gate the order flow uses. Planning work for an
+  unpaid order would put it on a machine the shop has not agreed to run.
+- **Stock counts first.** An order for 500 plain 5-gallon bottles with 830 on the shelf needs no machine
+  time. `committed` already counts the order among the promises against that stock, so the order's own
+  quantity is added back before the shelf is read — otherwise every order nets against itself and the
+  shop over-produces by exactly what it had already promised.
+- **Work is fitted into what each machine has left**, day by day, so adding an order can never create an
+  over-capacity day. What moves instead is the finish date, and `daysLate` says plainly when the date
+  the customer was already given has become a fiction. That is the number worth seeing before anyone
+  rings them back.
+- **It only ever offers.** Nothing is written until the owner presses the button, and an order that
+  already has steps is never offered again — re-planning around work the floor has started is a
+  different and far more dangerous operation than adding what was never there.
+
+`ItemRate` gained `blankId` and `caps`, which is what lets an order line reach a machine at all; the
+catalogue knew what a bottle cost but not what it was made from. Existing rows get a **one-time guess**
+(`inferBlank`, from the item text) and the answer is editable on the Item rates screen — "Moulded from",
+plus caps per bottle. An empty string means "not moulded here" and the guess leaves it alone. Planning
+**refuses** to work from a row it cannot resolve: the line is named and the button says why, rather than
+inventing something plausible.
+
+The Phase 3 tests import `app/app-data.ts` directly rather than mirroring it — the scheduler is too
+involved for a copy in the test file to prove anything about the code that ships. That needs Node 22.18+
+(the `engines` field still says `>=22.13 <23`, so on 22.13–22.17 those assertions fail loudly rather
+than passing quietly). Worth bumping `engines`, or moving the rest of the suites the same way.
+
+### Still open on Phase 3
+
+- **No re-planning.** Change an order's quantity after it is planned and the steps do not follow. The
+  guard exists for exactly this shape of problem, so the pieces are there, but the operation has to
+  leave started steps alone and nothing does that yet.
+- **Cancelling an order leaves its steps on the plan.** Same reason.
+- **The one-time blank guess has not been checked against the live catalogue.** It is right for all five
+  demo rows; the real one may have items it cannot read, and those will show up as "no blank set" on the
+  first order that needs them, which is the intended failure but worth a pass through Item rates first.
+
 ### Still open on Phase 2
 
 - **Assembly and palletizing have no capacity model**, so those steps are placed but never checked. Only
   moulding is constrained. If the bench is the real bottleneck on a heavy month, that needs modelling.
-- **Wholesale steps are added by hand.** Nothing generates them from an accepted order, so the calendar can
-  be out of step with what sales has promised. Deriving them from orders past the money gate is the
-  obvious next move, and it is a planning engine, not a screen.
 - **A month over capacity has no fix-it action** — the calendar names the problem and leaves the moving to
   a person. That is deliberate for now; an auto-reflow that moves a customer's date is not something to
   build before the owner asks for it.
@@ -204,7 +245,7 @@ part-recorded step so the guard and reconcile have something true to protect. Th
 
 - **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
   `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
-  Run with `node tests/<name>.test.mjs`. 133 assertions.
+  Run with `node tests/<name>.test.mjs`. 163 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.

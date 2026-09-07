@@ -159,3 +159,24 @@
   .plan-state{margin-left:0}
   .plan-form{grid-template-columns:1fr}
 }
+
+/* Paid orders that are not on the plan yet. Amber, not red: nothing is wrong, there is
+   just work the calendar has not been told about. The date it would finish on is the
+   point of the panel, so it sits next to the button that commits to it. */
+.plan-todo{border:1px solid #e8c98d;background:#fdf8ec;border-radius:12px;padding:16px 18px;margin-bottom:16px}
+.plan-todo h2{margin:0 0 4px;font-size:1rem;color:#5a4715}
+.plan-todo-note{margin:0 0 12px;font-size:.82rem;color:#7a6528;line-height:1.5}
+.plan-todo-row{background:#fff;border:1px solid #ecdcb8;border-radius:10px;padding:12px 14px;margin-top:10px}
+.plan-todo-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+.plan-todo-head b{font-size:.95rem}
+.plan-todo-head span{font-size:.82rem;color:#6d7a70}
+.plan-todo-lines{list-style:none;margin:8px 0 0;padding:0}
+.plan-todo-lines li{font-size:.84rem;color:#4a5a50;padding:3px 0;line-height:1.5}
+.plan-todo-lines em{font-style:normal;color:#177044}
+.plan-todo-lines strong{color:#3d4c43}
+.plan-todo-lines u{text-decoration:none;color:#b3261e;font-weight:700}
+.plan-todo-foot{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:10px;
+  border-top:1px solid #f1f4f2;padding-top:10px}
+.plan-todo-foot span{font-size:.84rem;font-weight:700;color:#177044}
+.plan-todo-foot span.late{color:#b3261e}
+.plan-todo-foot button:disabled{opacity:.55;cursor:default}

@@ -175,5 +175,82 @@ t("the guard's question is answered in the app, not a browser dialog",!/window\.
 t("the owner has reconcileStep",ui.includes("reconcileStep("));
 t("the floor has its own recordStep",ui.includes("recordStep("));
 
+// ---------------------------------------------------------------------------
+// Phase 3: wholesale orders become production. These run against the REAL exports rather than a copy
+// of them — the scheduler is too involved for a mirror in here to be worth anything, and a test of a
+// second implementation proves nothing about the one that ships. Node strips the types on import
+// (22.18+ / 24); on an older runtime this fails loudly rather than quietly passing.
+let app=null;
+try{app=await import("../app/app-data.ts")}catch(e){app=null;console.log("  note: "+e.message.split("\n")[0])}
+t("the app module can be imported directly",!!app,"needs Node 22.18+ for type stripping — the Phase 3 checks did not run");
+
+if(app){
+const {normalize,demoData,orderNeeds,ordersToPlan,planOrder,addSteps,dayLoad,DEFAULT_BLANKS,DEFAULT_MACHINES,isWorkday}=app;
+const base=normalize(demoData);
+const order=(over)=>({id:"SO-T",customerId:"c1",item:"5-Gallon Bottle · 2 caps",cases:0,quantity:0,due:"2026-09-18",
+  status:"Paid",payment:"Paid",stage:3,stageV2:true,notes:"",...over});
+const withOrders=(...os)=>normalize({...base,orders:[...base.orders,...os]});
+
+console.log("\nThe catalogue learns what each item is moulded from:");
+const rate=n=>base.itemRates.find(r=>r.item===n);
+t("5-gal with screw caps is a screw-top blank",rate("5-Gallon Bottle · 2 caps").blankId==="b-s5",`${rate("5-Gallon Bottle · 2 caps").blankId}`);
+t("3-gal with screw caps is the 3-gal screw blank",rate("3-Gallon Bottle · 2 caps").blankId==="b-s3");
+t("the plain 5-gal wholesale bottle is the regular blank",rate("5-Gallon Bottle · no cap").blankId==="b-r5");
+t("and it carries no caps",rate("5-Gallon Bottle · no cap").caps.length===0);
+t("caps sold by the pack are not moulded here",rate("Screw Caps · 10-pack").blankId===undefined);
+// "" is the owner saying "not moulded here" — a real answer, and the guess must not overwrite it.
+const answered=normalize({...base,itemRates:base.itemRates.map(r=>r.item==="5-Gallon Bottle · 2 caps"?{...r,blankId:""}:r)});
+t("an owner's 'not moulded here' survives the next load",answered.itemRates.find(r=>r.item==="5-Gallon Bottle · 2 caps").blankId==="");
+
+console.log("\nStock on the shelf counts before a machine is booked:");
+// 412 on hand, 300 committed — and those 300 are this very order, so the shelf covers it outright.
+const covered=orderNeeds(order({lines:[{item:"5-Gallon Bottle · 2 caps",quantity:300,rate:9.4}],quantity:300}),base);
+t("an order the warehouse can already fill needs no moulding",covered.toMake===0,`${covered.toMake}`);
+t("and it is reported as coming from stock",covered.lines[0].fromStock===300);
+const partly=orderNeeds(order({lines:[{item:"5-Gallon Bottle · 2 caps",quantity:2000,rate:9.4}],quantity:2000}),base);
+t("a bigger order moulds only the shortfall",partly.toMake===1588,`${partly.toMake}`);
+t("the caps follow the shortfall, not the order",partly.caps["Screw cap"]===1588*2,`${partly.caps["Screw cap"]}`);
+// Without adding the order's own promise back, every order would be netted against itself.
+t("an order is not netted against its own promise",covered.lines[0].make===0&&partly.lines[0].fromStock===412);
+const noBlank=orderNeeds(order({lines:[{item:"Screw Caps · 10-pack",quantity:400,rate:3.2}],quantity:400}),base);
+t("a line with no blank is named, not guessed at",noBlank.unplannable[0]==="Screw Caps · 10-pack");
+
+console.log("\nWork is fitted into what the machines have left:");
+const big=order({id:"SO-BIG",lines:[{item:"5-Gallon Bottle · 2 caps",quantity:2000,rate:9.4}],quantity:2000});
+const dataBig=withOrders(big);
+const plan=planOrder(big,dataBig,"2026-09-07");
+const moulds=plan.entries.filter(e=>e.step.type==="mold");
+t("every bottle short is scheduled",moulds.reduce((a,e)=>a+e.step.qty,0)===1588,`${moulds.reduce((a,e)=>a+e.step.qty,0)}`);
+// Sep 7-10 are full of Amazon screw-top work; the 11th has 176 on it, so 324 is what is left.
+t("it starts on the first day with room, not the first day",moulds[0].date==="2026-09-11"&&moulds[0].step.qty===324,`${moulds[0].date} ${moulds[0].step.qty}`);
+t("it steps over days the Amazon plan already fills",!moulds.some(e=>e.date==="2026-09-14"||e.date==="2026-09-15"));
+t("nothing is scheduled on a weekend",plan.entries.every(e=>isWorkday(e.date)));
+const after=addSteps(dataBig.prodDays,plan.entries);
+const overs=after.filter(d=>dayLoad(d,DEFAULT_BLANKS,DEFAULT_MACHINES).some(l=>l.over>0)).map(d=>d.date);
+// The demo's own 8th is over before this runs; planning must not add a second one.
+t("planning an order never overbooks a line",overs.length===1&&overs[0]==="2026-09-08",overs.join(", "));
+t("the assembly follows the last bottle off the machine",plan.entries.find(e=>e.step.type==="assemble").date>moulds[moulds.length-1].date);
+t("shipping is last",plan.finish===plan.entries[plan.entries.length-1].date);
+
+console.log("\nThe date already promised is checked against the machines:");
+t("a month that cannot be made by the date needed says so",plan.daysLate===6,`${plan.daysLate}`);
+const roomy=planOrder(order({id:"SO-ROOM",lines:[{item:"5-Gallon Bottle · 2 caps",quantity:300,rate:9.4}],quantity:300,due:"2026-09-30"}),base,"2026-09-07");
+t("an order that fits is not flagged",roomy.daysLate===null);
+t("an order the shelf covers skips straight to packing",roomy.entries.every(e=>e.step.type!=="mold")&&roomy.entries.length===2,roomy.entries.map(e=>e.step.type).join(","));
+
+console.log("\nOnly orders that are actually ready get planned:");
+const ids=d=>ordersToPlan(d).map(o=>o.id);
+t("a paid order with nothing planned is offered",ids(withOrders(order({id:"SO-PAID"}))).includes("SO-PAID"));
+t("an invoiced but unpaid order is left alone",!ids(withOrders(order({id:"SO-UNPAID",stage:2,payment:"Net 30",deposit:0}))).includes("SO-UNPAID"));
+t("a deposit is enough",ids(withOrders(order({id:"SO-DEP",payment:"Deposit",deposit:500}))).includes("SO-DEP"));
+t("an order awaiting the owner's pricing is left alone",!ids(withOrders(order({id:"SO-APPR",status:"Needs approval"}))).includes("SO-APPR"));
+t("an order already made is left alone",!ids(withOrders(order({id:"SO-MADE",stage:5}))).includes("SO-MADE"));
+// Planning twice would double the work; the steps it left behind are what stops it.
+const once=withOrders(order({id:"SO-ONCE"}));
+const planned=normalize({...once,prodDays:addSteps(once.prodDays,planOrder(once.orders.find(o=>o.id==="SO-ONCE"),once,"2026-09-07").entries)});
+t("an order already on the plan is not offered again",!ids(planned).includes("SO-ONCE"));
+t("its steps are all marked wholesale",planned.prodDays.flatMap(d=>d.steps).filter(s=>s.linkedTo==="SO-ONCE").every(s=>s.source==="wholesale"));
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail?1:0);

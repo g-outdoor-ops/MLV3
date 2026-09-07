@@ -12,8 +12,8 @@
 //  · Nothing the floor has already made may be edited away silently. Every edit runs guardStepEdit
 //    first and, when it has something to say, the person has to answer it before the change lands.
 import { useState } from "react";
-import { DEFAULT_BLANKS, DEFAULT_MACHINES, DEFAULT_SKUS, dayLoad, fmtDue, guardStepEdit, planTotals, reconcileStep, recordStep, stepStarted, stepTargetName, todayIso,
-  type MachineLoad, type ProdDay, type ProdSource, type ProdStep } from "../app-data";
+import { DEFAULT_BLANKS, DEFAULT_MACHINES, DEFAULT_SKUS, addSteps, dayLoad, fmtDue, guardStepEdit, orderNeeds, ordersToPlan, planOrder, planTotals, reconcileStep, recordStep, stepStarted, stepTargetName, todayIso,
+  type AppData, type MachineLoad, type OrderRecord, type ProdDay, type ProdSource, type ProdStep } from "../app-data";
 import { Kpi, num, uid, useApp } from "./store";
 
 export const PRODUCTION_PLAN="Production plan";
@@ -124,6 +124,11 @@ export function ProductionPlanView(){
       </div>
     </div>}
 
+    {owner&&<UnplannedOrders data={data} onPlan={(o,entries,summary)=>{
+      writeDays(ds=>addSteps(ds,entries),"plan.order",`${o.id} planned · ${entries.length} steps`);
+      notify(`${o.id} is on the production plan — ${summary}`,PRODUCTION_PLAN);
+    }}/>}
+
     {days.length?days.map(day=>{
       const loads=dayLoad(day,blanks,machines);
       const over=loads.some(l=>l.over>0);
@@ -196,6 +201,61 @@ export function ProductionPlanView(){
         </div>
       </article>;
     }):<article className="panel"><p className="empty-list">Nothing planned for {monthLabel}.</p></article>}
+  </section>;
+}
+
+/**
+ * Wholesale orders that are paid for and not on the calendar yet.
+ *
+ * Somebody used to have to remember that a customer order runs on the same two machines as the Amazon
+ * plan. This reads it off the record instead: what the order still needs after stock, where it fits in
+ * the gaps the Amazon work leaves, and — the part worth seeing before anyone rings the customer back —
+ * whether the machines can finish it by the date that was already promised.
+ *
+ * It only ever offers. Nothing is added to the plan until the owner says so.
+ */
+function UnplannedOrders({data,onPlan}:{data:AppData;onPlan:(o:OrderRecord,entries:{date:string;step:ProdStep}[],summary:string)=>void}){
+  const waiting=ordersToPlan(data);
+  if(!waiting.length)return null;
+  return <section className="plan-todo">
+    <h2>{waiting.length} paid order{waiting.length===1?"":"s"} not on the plan yet</h2>
+    <p className="plan-todo-note">These are past the money gate and can go on a machine. Adding one fills the gaps the Amazon plan leaves — it never overbooks a line, so if the date slips, the date is the truth.</p>
+    {waiting.map(o=>{
+      const customer=data.customers.find(c=>c.id===o.customerId);
+      const need=orderNeeds(o,data);
+      const plan=planOrder(o,data);
+      const moulds=plan.entries.filter(e=>e.step.type==="mold");
+      const summary=need.toMake?`${num(need.toMake)} to mould over ${new Set(moulds.map(e=>e.date)).size} day${new Set(moulds.map(e=>e.date)).size===1?"":"s"}, shipping ${fmtDue(plan.finish)}`:`nothing to mould — shipping ${fmtDue(plan.finish)} from stock`;
+      return <article key={o.id} className="plan-todo-row">
+        <div className="plan-todo-head">
+          <b>{o.id} · {customer?.name||"Customer"}</b>
+          <span>{num(o.quantity)} bottles · needed {fmtDue(o.due)}</span>
+        </div>
+        <ul className="plan-todo-lines">
+          {need.lines.map(l=><li key={l.item}>
+            <b>{l.item}</b> — {num(l.quantity)} ordered
+            {/* Stock and moulding only mean anything once the catalogue says what the item is made
+                from. Until then the only useful thing to say is that nobody has said. */}
+            {l.blankId?<>
+              {l.fromStock>0&&<> · <em>{num(l.fromStock)} already in stock</em></>}
+              {l.make>0?<> · <strong>{num(l.make)} to mould</strong></>:<> · <em>nothing to mould</em></>}
+            </>:<> · <u>no blank set on this item — set it under Item rates before this can be planned</u></>}
+          </li>)}
+        </ul>
+        <div className="plan-todo-foot">
+          {/* No finish date is offered for an order that cannot be scheduled — a date the plan cannot
+              stand behind is worse than no date. */}
+          <span className={need.unplannable.length||plan.daysLate?"late":""}>
+            {need.unplannable.length?`Cannot be scheduled until ${need.unplannable.join(" and ")} says what it is moulded from`
+              :plan.daysLate?`Finishes ${fmtDue(plan.finish)} — ${plan.daysLate} day${plan.daysLate===1?"":"s"} after the date needed`
+              :`Finishes ${fmtDue(plan.finish)}, in time`}
+          </span>
+          <button className="primary" disabled={!!need.unplannable.length} onClick={()=>onPlan(o,plan.entries,summary)}>
+            {need.unplannable.length?"Needs an item rate first":`Add to the plan · ${plan.entries.length} steps`}
+          </button>
+        </div>
+      </article>;
+    })}
   </section>;
 }
 
