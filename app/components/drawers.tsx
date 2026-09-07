@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { DEFAULT_QC, DEFAULT_SHIP, STAGES, STAGE_NEW, STAGE_INVOICED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, canStartProduction, documentBalance, documentTotal, fmtDay, orderTotals, stageOf, todayIso, type Customer, type DocumentRecord, type WorkOrder, fmtDue} from "../app-data";
+import { DEFAULT_QC, DEFAULT_SHIP, STAGES, STAGE_NEW, STAGE_INVOICED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, canStartProduction, documentBalance, documentTotal, dueDays, dueIso, fmtDay, orderTotals, stageOf, todayIso, type Customer, type DocumentRecord, type WorkOrder, fmtDue} from "../app-data";
 import { DetailField, ProfileSection, nextId, now, num, uid, useApp, usd2, type Role } from "./store";
 import { qboCall } from "./auth";
 
@@ -67,6 +67,8 @@ export function RecordDrawer({id,close}:{id:string;close:()=>void}){
       {!!order.discount&&<DetailField label="Discount" value={`${order.discount}% · −${usd2(t.disc)}`}/>}
       <DetailField label="Total" value={`${usd2(t.total)} · ${customer?.terms||""}`}/>
       <DetailField label="Needed" value={`${fmtDue(order.due)}${order.rep?` · taken by ${order.rep}`:""}`}/>
+      {/* What the customer was actually told when the order was taken, kept as it was quoted. */}
+      {order.promised&&<DetailField label="Promised" value={`${fmtDue(order.promised)}${dueDays(order.promised)!=null&&dueDays(order.due)!=null&&order.promised>String(dueIso(order.due))?" · later than the date asked for":""}`}/>}
       <DetailField label="Warehouse note" value={<>{order.notes||<i style={{color:"#7b867f"}}>none</i>} <button className="link-button" onClick={editNote}>edit</button></>}/>
       {order.invoiceNote&&<DetailField label="Invoice note" value={order.invoiceNote}/>}
       <DetailField label="Production" value={wos.length?<>{wos.map(w=><div key={w.id}>{w.id} · {w.status} · {num(w.good)} / {num(w.quantity)} · {w.line}</div>)}</>:"From stock — no run needed"}/>

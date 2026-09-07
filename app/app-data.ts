@@ -10,9 +10,16 @@ export type DocumentRecord={id:string;kind:"quote"|"invoice";customerId:string;i
   lines?:OrderLine[];total?:number;balance?:number;txnDate?:string;source?:"quickbooks"};
 export type OrderLine={item:string;quantity:number;rate:number};
 export type OrderRecord={stageV2?:boolean;id:string;customerId:string;item:string;cases:number;quantity:number;due:string;status:string;payment:string;deposit?:number;depositAt?:string;
-  lines?:OrderLine[];shipMethod?:string;shipping?:number;discount?:number;notes?:string;invoiceNote?:string;stage?:number;invoiceId?:string;rep?:string;createdAt?:string};
+  lines?:OrderLine[];shipMethod?:string;shipping?:number;discount?:number;notes?:string;invoiceNote?:string;stage?:number;invoiceId?:string;rep?:string;createdAt?:string;
+  // The date the customer was actually given when the order was taken, worked out from the line as it
+  // stood at that moment. Kept so what was promised can be compared with what happened, rather than
+  // being recalculated later against a queue that has moved on.
+  promised?:string};
 export type QcCheck={label:string;result:boolean|null};
-export type WorkOrder={id:string;orderId?:string;item:string;quantity:number;good:number;scrap:number;packed:number;date:string;status:string;purpose:string;line?:string;days?:number;qc?:QcCheck[];qcNote?:string;qcResult?:"pass"|"hold"|"scrap"|null};
+// `kind` says which station this run is on, and so what its good units eat: moulding pulls preforms,
+// assembly pulls caps. Without it an assembly run deducted PET preforms that had already been consumed
+// when the bottle was blown. Runs written before this are moulding.
+export type WorkOrder={id:string;orderId?:string;kind?:"mould"|"assembly";item:string;quantity:number;good:number;scrap:number;packed:number;date:string;status:string;purpose:string;line?:string;days?:number;qc?:QcCheck[];qcNote?:string;qcResult?:"pass"|"hold"|"scrap"|null};
 export type CalendarEvent={id:string;day:number;type:"order"|"stock"|"maintenance"|"delivery";title:string};
 export type Notice={id:string;title:string;detail:string;urgent:boolean;read:boolean;createdAt:string;target:string};
 export type Activity={id:string;customerId?:string;title:string;detail:string;actor:string;createdAt:string};
@@ -486,6 +493,28 @@ export function stepProgress(st:ProdStep,workOrders:WorkOrder[]=[],allSteps:Prod
 /** True when a step's record is owned by a run, so the plan must not offer to type the number again. */
 export const stepIsRun=(st:ProdStep)=>!!st.workOrderId;
 
+/** The station an assembly run sits on. Not a moulding machine — capping and boxing is bench work. */
+export const ASSEMBLY_LINE="Assembly";
+
+/**
+ * What one good unit off a run consumes. Moulding pulls the item's main material — a preform — and
+ * assembly pulls its caps, which is the whole reason a run has to say which it is: deducting preforms
+ * again at assembly would empty the shelf twice for one bottle.
+ */
+/** Take a run's consumption off the shelf. Never below zero — a count cannot go negative. */
+export const consume=(inventory:InventoryRow[],uses:{item:string;perUnit:number}[],units:number)=>
+  uses.length?inventory.map(row=>{
+    const use=uses.find(u=>u.item===row.item);
+    return use?{...row,onHand:Math.max(0,row.onHand-use.perUnit*units)}:row;
+  }):inventory;
+
+export function runConsumption(work:WorkOrder,itemRates:ItemRate[]):{item:string;perUnit:number}[]{
+  const rate=itemRates.find(r=>r.item===work.item);
+  if(!rate)return [];
+  if(work.kind==="assembly")return (rate.caps||[]).map(c=>({item:c.component,perUnit:c.qty}));
+  return rate.material?[{item:rate.material,perUnit:1}]:[];
+}
+
 export const stepLoad=(st:ProdStep,workOrders:WorkOrder[]=[],allSteps:ProdStep[]=[])=>{
   const p=stepProgress(st,workOrders,allSteps);
   return p.done?(p.made||st.qty):Math.max(st.qty,p.made);
@@ -627,17 +656,34 @@ export function orderNeeds(o:OrderRecord,data:AppData):OrderNeed{
  * does instead is push the finish date out, which is the honest answer and the one worth seeing before
  * the customer is promised anything: `daysLate` says whether the date already given is now a fiction.
  */
-export function planOrder(o:OrderRecord,data:AppData,from?:string){
+/** Machine load per day, keyed date|machineId — the running total a queue is scheduled against. */
+export type DayLoadMap=Record<string,number>;
+export const loadKey=(date:string,machineId:string)=>`${date}|${machineId}`;
+export function committedLoad(data:AppData):DayLoadMap{
+  const blanks=data.blanks?.length?data.blanks:DEFAULT_BLANKS;
+  const machines=data.settings.machines?.length?data.settings.machines:DEFAULT_MACHINES;
+  const all=(data.prodDays||[]).flatMap(d=>d.steps||[]);
+  const out:DayLoadMap={};
+  for(const day of data.prodDays||[])
+    for(const l of dayLoad(day,blanks,machines,data.workOrders||[],all))out[loadKey(day.date,l.machine.id)]=l.units;
+  return out;
+}
+
+/**
+ * Where an order's work fits.
+ *
+ * `load` is the running total of what the machines are already carrying. Pass one in to schedule an
+ * order behind everything ahead of it in the queue — it is updated as this order takes its shifts, so
+ * the next order in line sees them gone. Leave it out and the order is planned against the calendar as
+ * it stands today.
+ */
+export function planOrder(o:OrderRecord,data:AppData,from?:string,load?:DayLoadMap){
   const blanks=data.blanks?.length?data.blanks:DEFAULT_BLANKS;
   const machines=data.settings.machines?.length?data.settings.machines:DEFAULT_MACHINES;
   const need=orderNeeds(o,data);
   const entries:{date:string;step:ProdStep}[]=[];
-  // Load already on the calendar, plus anything this run has placed, so a big order stacked across
-  // several days does not book the same shift twice.
-  const placed:Record<string,number>={};
-  const key=(date:string,machineId:string)=>`${date}|${machineId}`;
-  for(const day of data.prodDays||[])
-    for(const l of dayLoad(day,blanks,machines))placed[key(day.date,l.machine.id)]=l.units;
+  const placed:DayLoadMap=load||committedLoad(data);
+  const key=loadKey;
 
   const cursor=nextWorkday(from||todayIso());
   let lastMould="";
@@ -686,6 +732,8 @@ export function planOrder(o:OrderRecord,data:AppData,from?:string){
  * real gap — a weekend is not a gap, a fortnight is a different batch.
  */
 export function runSteps(step:ProdStep,days:ProdDay[]):ProdStep[]{
+  // Only moulding runs across consecutive days on one machine. Assembly is a batch on a bench: one
+  // step, one run.
   if(step.type!=="mold")return [step];
   const dated=days.flatMap(d=>(d.steps||[]).map(s=>({date:d.date,step:s}))).sort((a,b)=>a.date.localeCompare(b.date));
   const start=dated.findIndex(x=>x.step.id===step.id);
@@ -709,9 +757,10 @@ export function runSteps(step:ProdStep,days:ProdDay[]):ProdStep[]{
  */
 export function runFromSteps(steps:ProdStep[],data:AppData,id:string,startDate:string):WorkOrder|null{
   const first=steps[0];
-  if(!first||first.type!=="mold")return null;
+  if(!first||(first.type!=="mold"&&first.type!=="assemble"))return null;
   const blanks=data.blanks?.length?data.blanks:DEFAULT_BLANKS;
   const machines=data.settings.machines?.length?data.settings.machines:DEFAULT_MACHINES;
+  const assembly=first.type==="assemble";
   const blank=blanks.find(b=>b.id===first.target);
   const machine=blank&&machines.find(m=>m.makes===blank.size);
   const order=first.linkedTo?data.orders.find(o=>o.id===first.linkedTo):undefined;
@@ -719,17 +768,109 @@ export function runFromSteps(steps:ProdStep[],data:AppData,id:string,startDate:s
   // blank; fall back again to the blank's own name so the run is still raised rather than refused.
   const fromOrder=order&&orderLines(order,data.itemRates).map(l=>l.item)
     .find(item=>data.itemRates.find(r=>r.item===item)?.blankId===first.target);
-  const item=fromOrder||data.itemRates.find(r=>r.blankId===first.target)?.item||blank?.name||first.target;
+  // An assembly step already names what it is making — a catalogue item for wholesale, a SKU for
+  // Amazon — so it is used directly rather than resolved back through a blank.
+  const item=assembly
+    ?(data.itemRates.find(r=>r.item===first.target)?.item||data.skus?.find(x=>x.id===first.target)?.name||first.target)
+    :(fromOrder||data.itemRates.find(r=>r.blankId===first.target)?.item||blank?.name||first.target);
   const customer=order?data.customers.find(c=>c.id===order.customerId)?.name:"";
   return {
-    id,orderId:first.linkedTo,item,
+    id,orderId:first.linkedTo,kind:assembly?"assembly":"mould",item,
     quantity:steps.reduce((a,s)=>a+s.qty,0),
     good:0,scrap:0,packed:0,
     date:startDate,status:"Scheduled",
     purpose:order?`${customer||"Customer"} order`:"Build stock",
-    line:machine?.line||data.settings.lines?.[0]||"Line 1",
+    line:assembly?ASSEMBLY_LINE:(machine?.line||data.settings.lines?.[0]||"Line 1"),
     days:new Set(steps.map(s=>s.id)).size,
   };
+}
+
+// ---- the line ----------------------------------------------------------------------
+// What the shop can promise, and when.
+//
+// Sales needs an answer before the customer is off the phone: if I take this order now, when is it
+// done? That answer is only worth anything if it counts everything already promised — the plan on the
+// machines AND every order ahead of this one in the queue. So the queue is scheduled in order, each
+// order taking the shifts the ones before it left, and the date that falls out is the date to give.
+//
+// First in, first served: an order's place is the order it was taken in. Nothing jumps the line by
+// being urgent, because the queue is the promise.
+
+export type QueueEntry={
+  order:OrderRecord;position:number;
+  finish:string;                       // when the machines can have it done
+  daysLate:number|null;                // against the date the customer was given
+  toMake:number;                       // bottles still to mould after stock
+  scheduled:boolean;                   // already on the calendar as real steps
+};
+
+/** Orders still to be made, oldest first. An order's place in line is when it was taken. */
+export const queueOrders=(data:AppData)=>(data.orders||[])
+  .filter(o=>o.status!=="Needs approval"&&stageOf(o)<STAGE_READY)
+  .sort((a,b)=>String(a.createdAt||a.id).localeCompare(String(b.createdAt||b.id)));
+
+/**
+ * The whole line, each order dated behind the ones ahead of it. Orders already on the calendar keep
+ * the date their steps say; the rest are scheduled into what is left, in queue order.
+ */
+export function productionQueue(data:AppData,from?:string):QueueEntry[]{
+  const load=committedLoad(data);
+  const days=data.prodDays||[];
+  const out:QueueEntry[]=[];
+  let position=0;
+  for(const order of queueOrders(data)){
+    position++;
+    const planned=plannedFor(order.id,days);
+    if(planned.length){
+      // Already on the calendar: its shifts are in `load` already, so read the date off the plan.
+      const ship=days.filter(d=>(d.steps||[]).some(s=>s.linkedTo===order.id)).map(d=>d.date).sort().pop()||"";
+      const due=dueIso(order.due);
+      const late=due&&ship?Math.round((new Date(ship+"T12:00:00Z").getTime()-new Date(due+"T12:00:00Z").getTime())/864e5):null;
+      out.push({order,position,finish:ship,daysLate:late!=null&&late>0?late:null,
+        toMake:orderNeeds(order,data).toMake,scheduled:true});
+      continue;
+    }
+    const plan=planOrder(order,data,from,load);          // takes its shifts out of `load`
+    out.push({order,position,finish:plan.finish,daysLate:plan.daysLate,toMake:plan.need.toMake,scheduled:false});
+  }
+  return out;
+}
+
+/**
+ * The machine load with everything ahead of an order in the queue already taken.
+ *
+ * Planning an order has to put it where the line says it goes, not wherever there happens to be a gap —
+ * otherwise the date the customer was given and the date the steps land on are two different answers,
+ * which is the same disease as the plan and the run holding two numbers. Orders ahead that are not on
+ * the calendar yet are simulated, so their place is held for them.
+ */
+export function loadAheadOf(data:AppData,orderId:string,from?:string):DayLoadMap{
+  const load=committedLoad(data);
+  for(const o of queueOrders(data)){
+    if(o.id===orderId)break;
+    if(plannedFor(o.id,data.prodDays||[]).length)continue;   // already on the calendar, already counted
+    planOrder(o,data,from,load);
+  }
+  return load;
+}
+
+/**
+ * What to tell a customer who is on the phone now. The draft is scheduled at the BACK of the line —
+ * behind every order already taken — because that is where it will actually sit.
+ */
+export function estimateOrder(data:AppData,lines:OrderLine[],from?:string){
+  const load=committedLoad(data);
+  for(const order of queueOrders(data)){
+    if(plannedFor(order.id,data.prodDays||[]).length)continue;   // its load is already counted
+    planOrder(order,data,from,load);
+  }
+  const draft:OrderRecord={id:"draft",customerId:"",item:lines.map(l=>l.item).join(" + "),
+    cases:0,quantity:lines.reduce((a,l)=>a+l.quantity,0),due:"",status:"Confirmed",payment:"",lines,
+    stage:STAGE_NEW,stageV2:true};
+  const plan=planOrder(draft,data,from,load);
+  return {finish:plan.finish,toMake:plan.need.toMake,need:plan.need,
+    position:queueOrders(data).length+1,
+    ahead:queueOrders(data).length};
 }
 
 /** The steps already on the plan for an order. Used to keep planning it twice from being possible. */

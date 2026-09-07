@@ -12,7 +12,7 @@
 //  · Nothing the floor has already made may be edited away silently. Every edit runs guardStepEdit
 //    first and, when it has something to say, the person has to answer it before the change lands.
 import { useState } from "react";
-import { DEFAULT_BLANKS, DEFAULT_MACHINES, DEFAULT_SKUS, STAGE_SHIPPED, addSteps, dayLoad, dueIso, fmtDue, stageOf, guardStepEdit, orderNeeds, ordersToPlan, planOrder, planTotals, reconcileStep, recordStep, runFromSteps, runSteps, stepProgress, stepTargetName, todayIso,
+import { DEFAULT_BLANKS, DEFAULT_MACHINES, DEFAULT_SKUS, STAGE_SHIPPED, addSteps, dayLoad, dueIso, fmtDue, stageOf, guardStepEdit, orderNeeds, ordersToPlan, planOrder, loadAheadOf, planTotals, productionQueue, reconcileStep, recordStep, runFromSteps, runSteps, stepProgress, stepTargetName, todayIso,
   type AppData, type Blank, type Machine, type MachineLoad, type OrderRecord, type ProdDay, type ProdSource, type ProdStep, type WorkOrder } from "../app-data";
 import { Kpi, nextId, num, uid, useApp } from "./store";
 
@@ -84,7 +84,7 @@ export function ProductionCalendarView(){
     const covered=runSteps(st,all);
     const id=nextId("WO-",runs.map(w=>w.id),116);
     const work=runFromSteps(covered,data,id,day.date);
-    if(!work){notify("Only moulding runs on a machine — this step has no run to raise",PRODUCTION_CALENDAR,true);return}
+    if(!work){notify("Only moulding and assembly are run as work orders — palletizing and shipping are recorded on the step",PRODUCTION_CALENDAR,true);return}
     const ids=new Set(covered.map(c=>c.id));
     commit(v=>({...v,
       workOrders:[...(v.workOrders||[]),work],
@@ -185,6 +185,8 @@ export function ProductionCalendarView(){
       </div>
     </div>}
 
+    <TheLine data={data} onOpen={openRecord}/>
+
     {owner&&<UnplannedOrders data={data} onPlan={(o,entries,summary)=>{
       writeDays(ds=>addSteps(ds,entries),"plan.order",`${o.id} planned · ${entries.length} steps`);
       notify(`${o.id} is on the production plan — ${summary}`,PRODUCTION_CALENDAR);
@@ -246,7 +248,7 @@ export function ProductionCalendarView(){
                   ?<button className="secondary" onClick={()=>openRecord(run.id)}>Open {run.id}</button>
                   :<>
                     {!progress.done&&<button className="secondary" onClick={()=>{setRecording(recording===st.id?null:st.id);setEditing(null);setReconciling(null)}}>{recording===st.id?"Cancel":"Record made"}</button>}
-                    {owner&&st.type==="mold"&&!started&&<button className="primary" onClick={()=>sendToFloor(st,day)}>Send to the floor</button>}
+                    {owner&&(st.type==="mold"||st.type==="assemble")&&!started&&<button className="primary" onClick={()=>sendToFloor(st,day)}>Send to the floor</button>}
                   </>}
                 {owner&&<button className="secondary" onClick={()=>{setEditing(editing===st.id?null:st.id);setRecording(null);setReconciling(null)}}>{editing===st.id?"Cancel":"Edit"}</button>}
                 {owner&&!run&&<button className="secondary" onClick={()=>{setReconciling(reconciling===st.id?null:st.id);setEditing(null);setRecording(null)}}>{reconciling===st.id?"Cancel":"Reconcile"}</button>}
@@ -285,6 +287,37 @@ export function ProductionCalendarView(){
       <span><i className="step-amazon"/>Amazon step</span><span><i className="step-wholesale"/>Wholesale step</span>
       <span><i className="order"/>Run · customer order</span><span><i className="stock"/>Run · build stock</span>
       <span><i className="maintenance"/>Maintenance</span><span><i className="delivery"/>Inbound delivery</span>
+    </div>
+  </section>;
+}
+
+/**
+ * The line: every order still to be made, in the order it was taken, each dated behind the ones ahead
+ * of it. First in, first served — nothing jumps the queue by being urgent, because the queue is the
+ * promise. What it is for is the last two columns: what the customer was told, and what the machines
+ * can actually do.
+ */
+function TheLine({data,onOpen}:{data:AppData;onOpen:(id:string)=>void}){
+  const queue=productionQueue(data);
+  if(!queue.length)return null;
+  const slipping=queue.filter(q=>q.daysLate);
+  return <section className="plan-queue">
+    <div className="plan-queue-head">
+      <h2>The line · {queue.length} order{queue.length===1?"":"s"} to make</h2>
+      <span className={slipping.length?"late":""}>{slipping.length?`${slipping.length} will miss the date given`:"all on time"}</span>
+    </div>
+    <div className="plan-queue-rows">
+      {queue.map(q=>{
+        const customer=data.customers.find(c=>c.id===q.order.customerId);
+        return <button key={q.order.id} className={`plan-queue-row${q.daysLate?" late":""}`} onClick={()=>onOpen(q.order.id)}>
+          <span className="plan-queue-pos">{q.position}</span>
+          <span className="plan-queue-who"><b>{q.order.id} · {customer?.name||"Customer"}</b>
+            <small>{num(q.order.quantity)} bottles · {q.toMake?`${num(q.toMake)} to make`:"from stock"}{q.scheduled?" · on the calendar":""}</small></span>
+          <span className="plan-queue-when"><b>{fmtDue(q.finish)}</b>
+            <small>{q.order.promised&&q.order.promised!==q.finish?`promised ${fmtDue(q.order.promised)}`:`needed ${fmtDue(q.order.due)}`}</small></span>
+          <em>{q.daysLate?`${q.daysLate}d late`:"on time"}</em>
+        </button>;
+      })}
     </div>
   </section>;
 }
@@ -386,6 +419,9 @@ function MonthGrid({ym,days,data,blanks,machines,runs,everyStep,filter,owner,sel
  */
 function UnplannedOrders({data,onPlan}:{data:AppData;onPlan:(o:OrderRecord,entries:{date:string;step:ProdStep}[],summary:string)=>void}){
   const waiting=ordersToPlan(data);
+  // Dates come from the queue, and the steps are placed against the same load the queue used. Reading
+  // one number here and writing another was how the panel and the line came to disagree.
+  const queue=productionQueue(data);
   if(!waiting.length)return null;
   return <section className="plan-todo">
     <h2>{waiting.length} paid order{waiting.length===1?"":"s"} not on the plan yet</h2>
@@ -393,12 +429,13 @@ function UnplannedOrders({data,onPlan}:{data:AppData;onPlan:(o:OrderRecord,entri
     {waiting.map(o=>{
       const customer=data.customers.find(c=>c.id===o.customerId);
       const need=orderNeeds(o,data);
-      const plan=planOrder(o,data);
+      const plan=planOrder(o,data,undefined,loadAheadOf(data,o.id));
+      const place=queue.find(q=>q.order.id===o.id);
       const moulds=plan.entries.filter(e=>e.step.type==="mold");
       const summary=need.toMake?`${num(need.toMake)} to mould over ${new Set(moulds.map(e=>e.date)).size} day${new Set(moulds.map(e=>e.date)).size===1?"":"s"}, shipping ${fmtDue(plan.finish)}`:`nothing to mould — shipping ${fmtDue(plan.finish)} from stock`;
       return <article key={o.id} className="plan-todo-row">
         <div className="plan-todo-head">
-          <b>{o.id} · {customer?.name||"Customer"}</b>
+          <b>{place?`#${place.position} · `:""}{o.id} · {customer?.name||"Customer"}</b>
           <span>{num(o.quantity)} bottles · needed {fmtDue(o.due)}</span>
         </div>
         <ul className="plan-todo-lines">

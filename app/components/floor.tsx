@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { DEFAULT_QC, STAGES, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, documentTotal, orderTotals, stageOf, type WorkOrder, fmtDue} from "../app-data";
+import { DEFAULT_QC, STAGES, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, consume, documentTotal, orderTotals, runConsumption, stageOf, type WorkOrder, fmtDue} from "../app-data";
 import { Fact, now, num, uid, useApp, usd2 } from "./store";
 
 export const floorNav=["Order flow","Production","Production calendar","Pack orders","My account"];
@@ -11,14 +11,15 @@ export function FloorView({nav,line,setLine}:{nav:string;line:string;setLine:(l:
   const [unit,setUnit]=useState<"racks"|"bottles">("racks");const [amount,setAmount]=useState("1");const [hist,setHist]=useState<{k:"good"|"scrap";n:number}[]>([]);
   const operator=user||"Warehouse";
   if(nav==="Pack orders")return <PackOrders operator={operator}/>;
-  const lines=data.settings.lines||["Line 1"];
+  const lines=Array.from(new Set([...(data.settings.lines||["Line 1"]),
+    ...data.workOrders.filter(w=>w.status!=="Done").map(w=>w.line||"Line 1")]));
   const lineWOs=data.workOrders.filter(w=>w.line===line&&w.status!=="Done");
   const job=lineWOs.find(w=>w.status==="Running")||lineWOs.find(w=>w.status==="Paused");
   const queue=lineWOs.filter(w=>w!==job&&["Released","Scheduled"].includes(w.status));
   const order=job?data.orders.find(o=>o.id===job.orderId):undefined;const customer=order?data.customers.find(c=>c.id===order.customerId):undefined;
   const patch=(id:string,fn:(w:WorkOrder)=>WorkOrder,action:string,summary:string,extra?:(v:typeof data)=>Partial<typeof data>)=>commit(v=>({...v,workOrders:v.workOrders.map(x=>x.id===id?fn(x):x),...(extra?extra(v):{})}),action,summary);
   const add=(n:number)=>{if(!job)return;const left=Math.max(0,job.quantity-job.good);const k=Math.min(n,left);if(!k)return notify("Nothing added — this work order is complete. Finish it.");
-    patch(job.id,w=>({...w,good:w.good+k}),"production.report",`${k} good bottles added to ${job.id}`,v=>({inventory:v.inventory.map(row=>{const mat=v.itemRates.find(r=>r.item===job.item)?.material;return row.item===mat?{...row,onHand:Math.max(0,row.onHand-k)}:row}),activities:[{id:uid("a"),customerId:order?.customerId,title:"Production updated",detail:`${job.id} · ${num(k)} good bottles`,actor:operator,createdAt:now()},...v.activities]}));
+    patch(job.id,w=>({...w,good:w.good+k}),"production.report",`${k} good bottles added to ${job.id}`,v=>({inventory:consume(v.inventory,runConsumption(job,v.itemRates),k),activities:[{id:uid("a"),customerId:order?.customerId,title:"Production updated",detail:`${job.id} · ${num(k)} good bottles`,actor:operator,createdAt:now()},...v.activities]}));
     setHist(h=>[...h,{k:"good",n:k}]);notify(`${num(k)} bottles added — ${job.id}`)};
   const scrap=()=>{if(!job)return;patch(job.id,w=>({...w,scrap:w.scrap+1}),"production.scrap",`1 scrap on ${job.id}`);setHist(h=>[...h,{k:"scrap",n:1}])};
   const undo=()=>{if(!job||!hist.length)return;const h=hist[hist.length-1];patch(job.id,w=>h.k==="good"?{...w,good:Math.max(0,w.good-h.n)}:{...w,scrap:Math.max(0,w.scrap-h.n)},"production.undo",`undo on ${job.id}`);setHist(x=>x.slice(0,-1))};

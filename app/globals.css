@@ -256,3 +256,30 @@
 .calendar-legend i.step-wholesale{background:#d9a02b}
 .month-more{border:0!important;background:transparent!important;color:#5d6b62!important;font-size:10px!important;
   font-weight:800;padding:3px 4px!important;text-align:left}
+
+/* The line — every order still to be made, in the order it was taken. */
+.plan-queue{background:#fff;border:1px solid #dfe6e1;border-radius:12px;padding:14px 16px;margin-bottom:16px}
+.plan-queue-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:8px}
+.plan-queue-head h2{margin:0;font-size:.95rem}
+.plan-queue-head span{font-size:.8rem;font-weight:800;color:#177044}
+.plan-queue-head span.late{color:#b3261e}
+.plan-queue-rows{display:flex;flex-direction:column}
+.plan-queue-row{display:grid;grid-template-columns:26px 1fr auto auto;gap:12px;align-items:center;width:100%;
+  text-align:left;border:0;border-top:1px solid #eef1ee;background:transparent;padding:10px 2px;font:inherit;color:#25332a}
+.plan-queue-row:hover{background:#f5f8f6}
+.plan-queue-pos{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;background:#eef3ef;
+  font-size:.75rem;font-weight:900;color:#4a5a50}
+.plan-queue-row b{display:block;font-size:.9rem}
+.plan-queue-row small{display:block;color:#6d7a70;font-size:.78rem;margin-top:2px}
+.plan-queue-when{text-align:right}
+.plan-queue-row em{font-style:normal;font-size:.75rem;font-weight:800;color:#177044;min-width:62px;text-align:right}
+.plan-queue-row.late em{color:#b3261e}
+.plan-queue-row.late .plan-queue-pos{background:#fdf2f0;color:#b3261e}
+
+/* The date the shop can actually promise, shown while the order is being taken. */
+.order-estimate{border:1px solid #cddbd2;background:#f7fbf8;border-radius:10px;padding:12px 14px;margin-bottom:12px}
+.order-estimate > div span{display:block;font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#4a5a50}
+.order-estimate > div strong{display:block;font-size:1.25rem;margin:3px 0 2px}
+.order-estimate > div small{display:block;color:#6d7a70;font-size:.8rem}
+.order-estimate.late{border-color:#e8c98d;background:#fdf8ec}
+.order-estimate p{margin:9px 0 0;color:#8a5a12;font-size:.82rem;line-height:1.5;font-weight:700}

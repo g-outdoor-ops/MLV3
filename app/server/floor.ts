@@ -18,7 +18,7 @@
 //     leaked link cannot reprice the catalogue or delete a customer, because there is no way to ask.
 // The .ts extension is deliberate: it is what Node's own resolver wants, so this module can be loaded
 // straight from tests/warehouse-link.test.mjs and checked as it ships rather than as a copy of itself.
-import { newFloorToken, recordStep, stepProgress, type AppData, type Blank, type Machine, type ProdDay, type ProdStep, type Sku, type WorkOrder } from "../app-data.ts";
+import { consume, newFloorToken, recordStep, runConsumption, stepProgress, type AppData, type Blank, type Machine, type ProdDay, type ProdStep, type Sku, type WorkOrder } from "../app-data.ts";
 
 /** Days either side of today the tablet is shown. Old work stays visible long enough to be recorded. */
 const WINDOW_BACK=10, WINDOW_FORWARD=28;
@@ -132,13 +132,13 @@ export function applyFloorAction(data:AppData,action:FloorAction,now=new Date().
     const good=Math.min(num(action.good),Math.max(0,wo.quantity-wo.good));
     const scrap=num(action.scrap);
     if(!good&&!scrap)return {error:"Nothing to add"};
-    const material=data.itemRates.find(r=>r.item===wo.item)?.material;
     return {
       data:{...data,
         workOrders:data.workOrders.map(w=>w.id===wo.id?{...w,good:w.good+good,scrap:w.scrap+scrap}:w),
-        // Good bottles eat their preforms. The app's own floor screen does this; if the link did not,
-        // material counts would drift every time the tablet used the link instead of the app.
-        inventory:good&&material?data.inventory.map(row=>row.item===material?{...row,onHand:Math.max(0,row.onHand-good)}:row):data.inventory},
+        // Good units eat their materials — preforms on a moulding run, caps on an assembly one. The
+        // app's own floor screen does this; if the link did not, counts would drift every time the
+        // tablet used the link instead of the app.
+        inventory:good?consume(data.inventory,runConsumption(wo,data.itemRates),good):data.inventory},
       action:"floor.progress",
       summary:`${wo.id} · +${good} good${scrap?`, +${scrap} scrap`:""} (${by})`,
     };

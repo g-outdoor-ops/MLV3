@@ -17,9 +17,8 @@ to invoicing or payments as touching real money.
 
 ## The state of play
 
-`main` is deployed and pushed through **`3af0039`**. Committed on top and **not pushed**: `8ff28e0`
-(Phase 3, wholesale orders onto the calendar), `ceab059` (the warehouse link), `aac91b9` (the plan and
-the run were two records of the same bottles), and Phase 5 in the tree — the two calendars merged.
+`main` is deployed and pushed through **`9d0fa57`** — Phases 1-5. Phase 6 is in the tree, uncommitted:
+assembly runs, and the production queue that dates an order when it is taken.
 
 The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
 The production rebuild is `4b2ed00` (Phase 1, model), `8c0bf42` (Phase 2, the calendar) and Phase 3 in
@@ -248,7 +247,7 @@ under each, so the same 24 bottles could be counted twice.
 - `Machine.line` was added because machines and lines were two vocabularies for one physical thing —
   which is how a run raised against a machine could land on a line nobody was looking at.
 
-### Phase 5 — one production calendar (in the tree, uncommitted)
+### Phase 5 — one production calendar (`9d0fa57`)
 
 The month grid and the day list were two screens drawing overlapping work. They are one screen now —
 **Production calendar**, `app/components/prodplan.tsx`, routed from `page.tsx` for every role. The old
@@ -273,11 +272,53 @@ started has to answer `guardStepEdit` first. There are two write paths for a ste
 Sales gets the same screen read-only (it keys off `role`, as before). `calendar.move` moved from
 `sales.tsx` to `prodplan.tsx`, so `tests/rendered-html.test.mjs` reads that file too now.
 
+### Phase 6 — assembly runs, and the line (in the tree, uncommitted)
+
+**Assembly is a run now.** "Send to the floor" works on an assembly step as well as a moulding one, and
+the work order it raises is marked `kind:"assembly"` and lands on an **Assembly** station rather than a
+moulding line. The floor tablet shows a tab for any station that has open work, so assembly is reachable
+without the owner adding a line in settings first. Palletizing and shipping still have no run — they are
+recorded on the step.
+
+That surfaced a real bug: **an assembly run was deducting PET preforms**, the same preforms the bottle
+had already been blown from. A run's consumption now depends on what it is — `runConsumption()` gives
+moulding the item's main material and assembly its caps (two screw caps per bottle, from the item rate)
+— and both the in-app floor screen and the warehouse link go through it.
+
+**The line.** Sales needs an answer before the customer is off the phone, and it is only worth anything
+if it counts everything already promised.
+
+- `productionQueue(data)` puts every order still to be made in the order it was taken — first in, first
+  served — and schedules each behind the ones ahead of it, so every order carries the date the machines
+  can actually finish it and whether that misses the date the customer was given.
+- `estimateOrder(data, lines)` answers the phone: it schedules a draft at the **back** of the line and
+  returns the date, what still has to be made, and the position. The order modal shows it live as the
+  rep types the quantity — "Can be finished Mon, Oct 12 · 50 to make · 5 orders ahead · #6 in line" —
+  and when the date asked for cannot be met it says so plainly, with the date to give instead.
+- The quoted date is stored on the order as `promised`, so what was said can be compared with what
+  happened rather than recalculated later against a queue that has moved on. It shows in the order
+  drawer.
+- **The line** panel on the production calendar shows the whole queue, with what will miss its date.
+
+`loadAheadOf()` is what keeps the promise honest: planning an order places it where the **queue** says
+it goes, holding the slots of orders ahead of it that are not on the calendar yet. Without it the panel
+that plans an order quoted a different date from the line — the same disease as the plan and the run
+holding two numbers, and a test now asserts the two agree for every unplanned order.
+
+**Taking an order no longer raises work orders.** The order modal used to create `Needs scheduling` work
+orders for anything short of stock, which was a third mechanism putting work on the floor with no idea
+of capacity. An order joins the queue instead, gets a real date, and becomes steps on the calendar when
+the money lands.
+
 ### Still open
 
-- **Assembly, palletizing and shipping steps have no run**, so they keep their own record. Correct today
-  — no work order models them — but it means "who recorded this" comes from two places depending on the
-  step type.
+- **Palletizing and shipping steps have no run**, so they keep their own record. Correct today — no work
+  order models them — but "who recorded this" still comes from two places depending on the step type.
+- **The queue is strictly the order taken.** Nothing lets the owner pull an urgent job forward, and
+  doing so by hand (moving steps) does not renumber the line. If a customer has to be jumped, the app
+  has no opinion about it yet.
+- **`estimateOrder` re-plans the whole queue on every keystroke** in the order modal. Fine at this size;
+  it would want memoising long before the order book reaches a few hundred.
 - The month cell caps at three chips. On a heavy day that hides real work behind "+2 more"; the day card
   below shows everything, but somebody scanning the grid for a clash could miss one.
 
@@ -342,7 +383,7 @@ on Render before the tablet is handed over.
 
 - **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
   `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
-  Run with `node tests/<name>.test.mjs`. 247 assertions.
+  Run with `node tests/<name>.test.mjs`. 272 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.

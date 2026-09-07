@@ -1,6 +1,6 @@
 "use client";
 import { useState, type ChangeEvent, type FormEvent } from "react";
-import { CAP_KINDS, DEFAULT_BLANKS, DEFAULT_QC, DEFAULT_SHIP, STAGE_NEW, daysFromNow, fmtDay, freeStock, orderTotals, todayIso, type Customer, type DocumentRecord, type OrderLine, type OrderRecord, type WorkOrder } from "../app-data";
+import { CAP_KINDS, DEFAULT_BLANKS, DEFAULT_QC, DEFAULT_SHIP, STAGE_NEW, daysFromNow, estimateOrder, fmtDue, fmtDay, freeStock, orderTotals, todayIso, type Customer, type DocumentRecord, type OrderLine, type OrderRecord, type WorkOrder } from "../app-data";
 import { CrmSection, nextId, now, num, uid, useApp, usd2, type Modal } from "./store";
 import { qboCall } from "./auth";
 
@@ -33,21 +33,29 @@ export function OrderModal({kind,close,presetCustomer,fromQuote}:{kind:"order"|"
   // an unambiguous date to work from instead of a year-less string.
   const dueLabel=due;
 
+  // What the shop can actually promise for this order, taken at the back of the line behind everything
+  // already on the machines and everything already sold. This is the number that goes to the customer.
+  const estimate=kind==="order"&&priced.length?estimateOrder(data,priced):null;
+  const promisedLate=estimate&&due&&estimate.finish>due?Math.round((new Date(estimate.finish+"T12:00:00Z").getTime()-new Date(due+"T12:00:00Z").getTime())/864e5):0;
+
   const [saving,setSaving]=useState(false);
   const submit=async(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();if(!cust||!priced.length)return;
     if(saving)return;setSaving(true);
     try{
     if(kind==="order"){
       const id=nextId("SO-",data.orders.map(o=>o.id),1187);
-      const rec:OrderRecord={id,customerId:cust.id,item:priced.map(l=>l.item).join(" + "),cases:t.cases,quantity:draft.quantity,due:dueLabel,status:needsApproval?"Needs approval":"Confirmed",payment:cust.terms,lines:priced,shipMethod:ship,shipping:t.ship,discount:disc,notes,invoiceNote:custNote,stage:STAGE_NEW,stageV2:true,rep:user,createdAt:new Date().toISOString()};
-      const newWOs:WorkOrder[]=short.map((l,i)=>{const row=data.inventory.find(x=>x.item===l.item)!;const need=l.quantity-Math.max(0,freeStock(row));return {id:`WO-${parseInt(nextId("WO-",data.workOrders.map(w=>w.id),116).slice(3),10)+i}`,orderId:id,item:l.item,quantity:Math.ceil(need/100)*100+100,good:0,scrap:0,packed:0,date:todayIso(),status:"Needs scheduling",purpose:`${cust.name} order`,line:data.settings.lines?.[0]||"Line 1",days:1}});
+      const rec:OrderRecord={id,customerId:cust.id,item:priced.map(l=>l.item).join(" + "),cases:t.cases,quantity:draft.quantity,due:dueLabel,status:needsApproval?"Needs approval":"Confirmed",payment:cust.terms,lines:priced,shipMethod:ship,shipping:t.ship,discount:disc,notes,invoiceNote:custNote,stage:STAGE_NEW,stageV2:true,rep:user,createdAt:new Date().toISOString(),...(estimate?{promised:estimate.finish}:{})};
+      // No work orders are raised here any more. An order joins the production queue, gets the date the
+      // line can actually promise, and becomes real steps on the calendar when the money lands — which
+      // is one route onto a machine instead of three that disagreed.
+      const newWOs:WorkOrder[]=[];
       commit(v=>({...v,orders:[rec,...v.orders],workOrders:[...v.workOrders,...newWOs],
         inventory:v.inventory.map(row=>{const l=priced.find(x=>x.item===row.item);return l?{...row,committed:row.committed+l.quantity}:row}),
         customers:v.customers.map(c=>c.id===cust.id&&c.kind==="lead"?{...c,kind:"customer",stage:"Active"}:c),
         documents:fromQuote?v.documents.map(d=>d.id===fromQuote.id?{...d,status:"Accepted",orderId:id}:d):v.documents,
         notices:[{id:uid("n"),title:`New order ${id} · ${cust.name}`,detail:`${priced.map(l=>num(l.quantity)+" × "+l.item).join(" + ")} · needed ${dueLabel}${newWOs.length?" · "+newWOs.map(w=>w.id).join(", ")+" needs a slot":""}${needsApproval?" · pricing needs owner approval":""}`,urgent:newWOs.length>0||needsApproval,read:false,createdAt:now(),target:"Orders"},...v.notices],
         activities:[{id:uid("a"),customerId:cust.id,title:"Order placed",detail:`${id} · ${usd2(t.total)}`,actor:user,createdAt:now()},...v.activities]}),"order.create",`${id} for ${cust.name}`);
-      notify(`Order ${id} saved — ${usd2(t.total)}${newWOs.length?` · ${newWOs.map(w=>w.id).join(", ")} created`:""}${needsApproval?" · waiting for owner approval":""}`,"Orders",needsApproval);close();openRecord(id);
+      notify(`Order ${id} saved — ${usd2(t.total)}${estimate?` · promised ${fmtDue(estimate.finish)}`:""}${needsApproval?" · waiting for owner approval":""}`,"Orders",needsApproval);close();openRecord(id);
     } else {
       const id=nextId(kind==="quote"?"Q-":"INV-",data.documents.filter(x=>x.kind===kind).map(x=>x.id),kind==="quote"?2040:1042);
       let qbo:{qboId?:string;docNumber?:string;customerId?:string;total?:number;balance?:number}={};
@@ -82,6 +90,14 @@ export function OrderModal({kind,close,presetCustomer,fromQuote}:{kind:"order"|"
       {kind!=="invoice"&&<label>Note for the warehouse<input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Pallet, caps, pickup instructions…"/></label>}
       <label>Note on the {kind==="order"?"invoice":kind} (customer sees it)<input value={custNote} onChange={e=>setCustNote(e.target.value)} placeholder="PO number, thank-you…"/></label>
     </div>
+    {estimate&&<div className={`order-estimate${promisedLate?" late":""}`}>
+      <div>
+        <span>Can be finished</span>
+        <strong>{fmtDue(estimate.finish)}</strong>
+        <small>{estimate.toMake?`${num(estimate.toMake)} to make`:"from stock"} · {estimate.ahead?`${estimate.ahead} order${estimate.ahead===1?"":"s"} ahead`:"nothing ahead"} · this one would be #{estimate.position} in line</small>
+      </div>
+      {promisedLate>0&&<p>The date asked for is {promisedLate} day{promisedLate===1?"":"s"} before the machines can have it. Tell the customer {fmtDue(estimate.finish)}, or move something ahead of it.</p>}
+    </div>}
     <div className="quote-total"><span>{num(draft.quantity)} bottles · {t.cases} boxes{disc?` · less ${disc}%`:""} · shipping {t.ship?usd2(t.ship):"free"}{short.length?` · ${short.length} item${short.length>1?"s":""} will need a production run`:""}</span><strong>{usd2(t.total)}</strong></div>
     {needsApproval&&<p className="link-warning">{underFloor.length?"A price is below the owner's floor.":`Discount is over ${limit}%.`} This will be saved and sent to Christopher for approval before it goes to the customer.</p>}
   </Shell>;

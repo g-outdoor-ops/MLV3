@@ -317,7 +317,83 @@ t("it spans the days it covers",work.days===3,`${work.days}`);
 t("and starts where the plan put it",work.date==="2026-09-14");
 // A step already being run must not be swept into a second one.
 t("a step already on a run is not covered again",!runSteps(byId("ps-m1"),d.prodDays).some(x=>x.id==="ps-m2"));
-t("a step that is not moulding raises no run",runFromSteps([all.find(x=>x.type==="assemble")],d,"WO-901","2026-09-15")===null);
+// Assembly raises a run of its own now (see Phase 6 below); packing and the truck do not.
+t("shipping raises no run",runFromSteps([all.find(x=>x.type==="ship")],d,"WO-901","2026-09-23")===null);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6: assembly runs, and the line.
+if(app){
+const {normalize,demoData,runFromSteps,runConsumption,consume,productionQueue,estimateOrder,queueOrders,ASSEMBLY_LINE}=app;
+const d=normalize(demoData);
+const all=d.prodDays.flatMap(x=>x.steps);
+
+console.log("\nAssembly is a run too:");
+const asm=all.find(x=>x.type==="assemble");
+const asmRun=runFromSteps([asm],d,"WO-950","2026-09-15");
+t("an assembly step raises a run",!!asmRun);
+t("it is marked as assembly, not moulding",asmRun.kind==="assembly");
+t("it goes to the bench, not a moulding line",asmRun.line===ASSEMBLY_LINE,`${asmRun.line}`);
+t("it is for what the step assembles",asmRun.quantity===asm.qty);
+// Palletizing and shipping are recorded on the step; there is no run for them.
+t("palletizing raises no run",runFromSteps([all.find(x=>x.type==="palletize")],d,"WO-951","2026-09-21")===null);
+
+console.log("\nA run eats what it actually uses:");
+const mould={id:"m",kind:"mould",item:"5-Gallon Bottle · 2 caps",quantity:100,good:0,scrap:0,packed:0,date:"",status:"Running",purpose:""};
+const assembly={...mould,id:"a",kind:"assembly"};
+const mouldUses=runConsumption(mould,d.itemRates),asmUses=runConsumption(assembly,d.itemRates);
+t("moulding pulls preforms",mouldUses.length===1&&/preform/i.test(mouldUses[0].item),JSON.stringify(mouldUses));
+t("assembly pulls caps",asmUses.length===1&&/cap/i.test(asmUses[0].item),JSON.stringify(asmUses));
+t("two caps per bottle, not one",asmUses[0].perUnit===2,`${asmUses[0].perUnit}`);
+// The bug this closes: assembly used to deduct the preforms the bottle was already blown from.
+t("assembly does not take preforms a second time",!asmUses.some(u=>/preform/i.test(u.item)));
+const before=d.inventory.find(i=>/preform/i.test(i.item)&&/5-gal/i.test(i.item));
+const afterAsm=consume(d.inventory,asmUses,10);
+t("so the preform shelf is untouched by an assembly run",
+  afterAsm.find(i=>i.item===before.item).onHand===before.onHand);
+t("and a count never goes below zero",consume(d.inventory,mouldUses,1e9).every(i=>i.onHand>=0));
+
+console.log("\nThe line — first in, first served:");
+const queue=productionQueue(d,"2026-09-07");
+t("every order still to be made is in it",queue.length===queueOrders(d).length);
+t("positions run 1..n in the order they were taken",queue.every((q,i)=>q.position===i+1));
+t("an order already on the calendar keeps the date its steps say",queue.some(q=>q.scheduled));
+t("every order gets a finish date",queue.every(q=>/^\d{4}-\d{2}-\d{2}$/.test(q.finish)),queue.map(q=>q.finish).join(","));
+// The whole point: a date that counts what is already promised, not just this order's own work.
+const est=estimateOrder(d,[{item:"5-Gallon Bottle · 2 caps",quantity:2000,rate:9.4}],"2026-09-07");
+t("a new order is quoted from the back of the line",est.position===queue.length+1&&est.ahead===queue.length);
+t("and it is told what it still has to make",est.toMake===1588,`${est.toMake}`);
+t("the date is after everything ahead of it",queue.every(q=>est.finish>=q.finish),`${est.finish}`);
+// Two identical orders taken one after the other cannot both be promised the same shift.
+const one=estimateOrder(d,[{item:"5-Gallon Bottle · 2 caps",quantity:2000,rate:9.4}],"2026-09-07");
+const withFirst=normalize({...d,orders:[...d.orders,{id:"SO-Q1",customerId:"c1",item:"5-Gallon Bottle · 2 caps",cases:0,quantity:2000,due:"2026-10-30",status:"Confirmed",payment:"Paid",stage:3,stageV2:true,createdAt:"2026-09-07T10:00:00Z",lines:[{item:"5-Gallon Bottle · 2 caps",quantity:2000,rate:9.4}]}]});
+const two=estimateOrder(withFirst,[{item:"5-Gallon Bottle · 2 caps",quantity:2000,rate:9.4}],"2026-09-07");
+t("the second of two identical orders is quoted later than the first",two.finish>one.finish,`${one.finish} then ${two.finish}`);
+t("and it is one place further back",two.position===one.position+1);
+// A small order behind a big one still waits for the machine, which is the honest answer.
+const small=estimateOrder(withFirst,[{item:"5-Gallon Bottle · 2 caps",quantity:50,rate:9.4}],"2026-09-07");
+t("a small order behind a big one is not promised the earth",small.finish>=one.finish||small.toMake===0,`${small.finish} make ${small.toMake}`);
+
+console.log("\nThe date shown is the date the steps land on:");
+// The queue said one thing and the panel that plans the order said another, because one counted the
+// orders ahead and the other did not.
+const {loadAheadOf,planOrder:plan2,ordersToPlan:toPlan}=app;
+for(const o of toPlan(d)){
+  const q=productionQueue(d,"2026-09-07").find(x=>x.order.id===o.id);
+  const placed=plan2(o,d,"2026-09-07",loadAheadOf(d,o.id,"2026-09-07"));
+  t(`${o.id} is planned on the date the line quotes`,placed.finish===q.finish,`line ${q.finish}, plan ${placed.finish}`);
+}
+// An order's place is held even when the ones ahead of it have not been added to the calendar yet.
+const first=toPlan(d)[0],last=toPlan(d)[toPlan(d).length-1];
+if(first&&last&&first.id!==last.id)
+  t("an order behind another is not given the shifts in front of it",
+    Object.keys(loadAheadOf(d,last.id,"2026-09-07")).length>=Object.keys(loadAheadOf(d,first.id,"2026-09-07")).length);
+
+console.log("\nTaking an order no longer raises work orders behind the plan's back:");
+const modal=readFileSync(new URL("../app/components/modals.tsx",import.meta.url),"utf8");
+t("the order modal quotes from the line",modal.includes("estimateOrder("));
+t("it stores what the customer was told",modal.includes("promised:estimate.finish"));
+t("and it raises no work orders of its own",/const newWOs:WorkOrder\[\]=\[\];/.test(modal));
 }
 
 // One calendar, not two. The month grid and the day list were separate screens drawing overlapping
