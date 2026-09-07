@@ -9,8 +9,14 @@
 let pass=0,fail=0;
 const t=(n,c,d)=>{if(c)pass++;else fail++;console.log(`${c?"  ok  ":"  FAIL"} ${n}${c?"":"  → "+d}`)};
 
+const readFileSyncRoute=()=>{
+  const {readFileSync}=require$("node:fs");
+  return readFileSync(new URL("../app/api/floor/route.ts",import.meta.url),"utf8");
+};
+let require$=null;
 let floor=null,app=null;
 try{
+  require$=await import("node:module").then(m=>m.createRequire(import.meta.url));
   floor=await import("../app/server/floor.ts");
   app=await import("../app/app-data.ts");
 }catch(e){console.log("  note: "+e.message.split("\n")[0])}
@@ -116,6 +122,12 @@ t("the tablet shows the run's figure, not the plan's",shown.actualQty===500,`${s
 t("and names the run so the operator knows where to look",shown.workOrderId===onRun.workOrderId);
 const free=data.prodDays.flatMap(d=>d.steps).find(s=>!s.workOrderId&&!s.done);
 t("a step with no run is still recordable from the tablet",!applyFloorAction(data,{op:"step.record",stepId:free.id,made:10}).error);
+
+console.log("\nNothing about this endpoint may sit in a cache:");
+const route=readFileSyncRoute();
+t("the answer is no-store",/NO_STORE/.test(route)&&/"cache-control":"no-store"/.test(route));
+// A cached 401 in front of a link that works would look exactly like a broken link.
+t("so is the refusal",/const deny=\(\)=>Response\.json\([^)]*status:401,headers:NO_STORE/.test(route.replace(/\n/g," ")));
 
 console.log("\nThe audit says the record came from the link, not from a person who signed in:");
 t("an unnamed tablet is still identified",floorActor()==="Warehouse link");
