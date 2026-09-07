@@ -169,8 +169,14 @@ t("and names who corrected it",corrected.reconciledBy==="Chris");
 // The screen must not be able to write an edit that skipped the guard.
 console.log("\nThe calendar cannot edit a started step silently:");
 const ui=readFileSync(new URL("../app/components/prodplan.tsx",import.meta.url),"utf8");
-const editBlock=ui.slice(ui.indexOf("onSave={(next,toDate)=>{"),ui.indexOf('"plan.step.edit"'));
-t("the edit path calls guardStepEdit before it writes",editBlock.includes("guardStepEdit("),"no guard in the edit path");
+// Every write of an edited step — the editor and the drag-to-another-day on the month grid — has to
+// have asked the guard first. Checking each write site, not just the first one, is the point: a second
+// way to move a step is exactly how the guard would get bypassed.
+const editWrites=[...ui.matchAll(/"plan\.step\.edit"/g)].map(m=>m.index);
+t("there is more than one way to edit a step",editWrites.length>=2,`${editWrites.length}`);
+t("every edit path calls guardStepEdit before it writes",
+  editWrites.length>0&&editWrites.every(i=>ui.slice(Math.max(0,i-900),i).includes("guardStepEdit(")),
+  "a write with no guard above it");
 t("the guard's question is answered in the app, not a browser dialog",!/window\.(confirm|prompt)/.test(ui));
 t("the owner has reconcileStep",ui.includes("reconcileStep("));
 t("the floor has its own recordStep",ui.includes("recordStep("));
@@ -313,6 +319,20 @@ t("and starts where the plan put it",work.date==="2026-09-14");
 t("a step already on a run is not covered again",!runSteps(byId("ps-m1"),d.prodDays).some(x=>x.id==="ps-m2"));
 t("a step that is not moulding raises no run",runFromSteps([all.find(x=>x.type==="assemble")],d,"WO-901","2026-09-15")===null);
 }
+
+// One calendar, not two. The month grid and the day list were separate screens drawing overlapping
+// work; a second one creeping back is the regression worth catching in the source.
+console.log("\nThere is one production calendar:");
+const nav=readFileSync(new URL("../app/components/owner.tsx",import.meta.url),"utf8");
+const floorNav=readFileSync(new URL("../app/components/floor.tsx",import.meta.url),"utf8");
+const salesSrc=readFileSync(new URL("../app/components/sales.tsx",import.meta.url),"utf8");
+const planSrc=readFileSync(new URL("../app/components/prodplan.tsx",import.meta.url),"utf8");
+t("the owner has one calendar in the nav",(nav.match(/"Production calendar"/g)||[]).length>=1&&!nav.includes('"Production plan"'));
+t("so does the floor",floorNav.includes('"Production calendar"')&&!floorNav.includes('"Production plan"'));
+t("the old month-grid component is gone from sales",!/export function ProductionCalendar\b/.test(salesSrc));
+t("the merged screen draws both readings",planSrc.includes('view==="month"')&&planSrc.includes("MonthGrid"));
+t("and it still carries what only the old calendar had",
+  ["maintenance","purchaseOrders","STAGE_SHIPPED"].every(k=>planSrc.includes(k)));
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail?1:0);

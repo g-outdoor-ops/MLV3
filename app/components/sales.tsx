@@ -1,19 +1,18 @@
 "use client";
 import { useState } from "react";
-import { STAGES, STAGE_INVOICED, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, documentTotal, orderTotals, stageOf, type WorkOrder, fmtDue} from "../app-data";
+import { STAGES, STAGE_INVOICED, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, documentTotal, orderTotals, stageOf, fmtDue} from "../app-data";
 import { Kpi, MiniRow, MoneyRow, initials, num, useApp, usd, usd2, type Modal } from "./store";
 import { authCall } from "./auth";
 
 export const salesNav=["Order flow","Dashboard","Leads","Customers","Quotes","Invoices","Orders","Production calendar","My account"];
 
 export function SalesView({nav}:{nav:string}){
-  const {setModal,role}=useApp();
+  const {setModal}=useApp();
   if(nav==="Leads")return <Leads/>;
   if(nav==="Customers")return <Customers/>;
   if(nav==="Quotes")return <DocList kind="quote"/>;
   if(nav==="Invoices")return <DocList kind="invoice"/>;
   if(nav==="Orders")return <OrdersPage/>;
-  if(nav==="Production calendar")return <ProductionCalendar audience={role==="owner"?"owner":"sales"}/>;
   if(nav==="My account")return <MyAccount/>;
   return <SalesDashboard setModal={setModal}/>;
 }
@@ -65,29 +64,9 @@ export function Customers(){
   return <><div className="heading-row"><div><p className="eyebrow">Sales</p><h1>Customers</h1><p className="intro">Import a spreadsheet or add one company at a time.</p></div><div className="button-row"><button className="secondary" onClick={()=>setModal("import")}>Import CSV</button><button className="primary" onClick={()=>setModal("lead")}>+ Add customer</button></div></div><div className="customer-search"><span>⌕</span><input aria-label="Search customers" placeholder="Search by company, contact, phone, or email..." value={search} onChange={e=>setSearch(e.target.value)}/>{search&&<button onClick={()=>setSearch("")}>Clear</button>}</div><p className="result-count">{filtered.length} {filtered.length===1?"customer":"customers"}</p><article className="panel list">{filtered.length?filtered.map(x=><button key={x.id} onClick={()=>openCustomer(x.id)}><span className="initials">{initials(x.name)}</span><span><b>{x.name}</b><small>{x.contact} · {x.rep} · {x.terms}</small></span><span>{x.balance?`${usd(x.balance)} due`:"Paid up"} →</span></button>):<div className="empty-list">No customers match.</div>}</article></>;
 }
 
-// ---------------- PRODUCTION CALENDAR — work orders + maintenance + inbound POs, live ----------------
-type CalItem={id:string;date:string;type:"order"|"stock"|"maintenance"|"delivery";title:string;wo?:WorkOrder};
-export function ProductionCalendar({audience}:{audience:"sales"|"owner"}){
-  const {data,commit,notify,openRecord,setModal}=useApp();const today=new Date();const [ym,setYm]=useState({y:today.getFullYear(),m:today.getMonth()});const [selected,setSelected]=useState<string|null>(null);
-  const first=new Date(ym.y,ym.m,1).getDay();const count=new Date(ym.y,ym.m+1,0).getDate();const cells=[...Array(first).fill(null),...Array.from({length:count},(_,i)=>i+1)];const monthName=new Intl.DateTimeFormat("en-US",{month:"long",year:"numeric"}).format(new Date(ym.y,ym.m,1));
-  const iso=(d:number)=>`${ym.y}-${String(ym.m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-  const parseLabel=(s:string)=>{const d=new Date(`${s} ${ym.y}`);return isNaN(d.getTime())?null:d};
-  const items:CalItem[]=[
-    ...data.workOrders.filter(w=>w.status!=="Needs scheduling").flatMap(w=>Array.from({length:w.days||1},(_,k)=>{const d=new Date(w.date+"T12:00:00");d.setDate(d.getDate()+k);const so=data.orders.find(o=>o.id===w.orderId);return {id:w.id,date:d.toISOString().slice(0,10),type:(w.orderId?"order":"stock") as CalItem["type"],title:`${w.id} · ${w.item.split(" · ")[0]}${so?` · ${data.customers.find(c=>c.id===so.customerId)?.name.split(" ")[0]}`:""} · ${w.line}${k?" (cont.)":""}`,wo:w}})),
-    ...(data.maintenance||[]).filter(m=>m.status!=="Complete").map(m=>{const d=parseLabel(m.due);return d?{id:m.id,date:d.toISOString().slice(0,10),type:"maintenance" as const,title:`${m.machine} · ${m.task}`}:null}).filter(Boolean) as CalItem[],
-    ...(data.purchaseOrders||[]).filter(p=>p.status==="Open").map(p=>{const d=parseLabel(p.eta.replace(/\s*\(.*\)/,""));return d?{id:p.id,date:d.toISOString().slice(0,10),type:"delivery" as const,title:`${p.id} · ${p.item.split(" · ")[0]} · ${num(p.quantity)}`}:null}).filter(Boolean) as CalItem[],
-    ...data.orders.filter(o=>stageOf(o)<STAGE_SHIPPED).map(o=>{const d=parseLabel(o.due);return d?{id:o.id,date:d.toISOString().slice(0,10),type:"order" as const,title:`Due · ${o.id} · ${data.customers.find(c=>c.id===o.customerId)?.name.split(" ")[0]}`}:null}).filter(Boolean) as CalItem[],
-  ];
-  const move=(id:string,target:number)=>{const w=data.workOrders.find(x=>x.id===id);if(!w){setSelected(null);return}if(w.status==="Running"||w.status==="Done"){notify(`${w.id} is ${w.status.toLowerCase()} and can't be moved`,"Production calendar");setSelected(null);return}commit(v=>({...v,workOrders:v.workOrders.map(x=>x.id===id?{...x,date:iso(target),status:x.status==="Needs scheduling"?"Scheduled":x.status}:x)}),"calendar.move",`${id} moved to ${monthName} ${target}`);notify(`${id} moved to ${monthName} ${target}`,"Production calendar");setSelected(null)};
-  const waiting=data.workOrders.filter(w=>w.status==="Needs scheduling");
-  const todayIso=today.toISOString().slice(0,10);
-  return <><div className="heading-row"><div><p className="eyebrow">Full production schedule</p><h1>Production calendar</h1><p className="intro">{audience==="sales"?"See when customer orders are planned, produced, packed, and ready.":"Work orders, order due dates, inbound deliveries, and maintenance on one schedule."}</p></div>{audience==="owner"&&<button className="primary" onClick={()=>setModal("workorder")}>+ Work order</button>}</div>
-    {audience==="owner"&&waiting.length>0&&<div className="company-health" style={{marginBottom:12}}><span><i className="health-dot" style={{background:"#cf6822"}}/>Waiting for a slot: <b>{waiting.map(w=>`${w.id} (${num(w.quantity)} × ${w.item.split(" · ")[0]})`).join(", ")}</b></span><small>{waiting.map(w=><button key={w.id} className="link-button" onClick={()=>setSelected(w.id)}>Place {w.id}</button>)}</small></div>}
-    <div className="calendar-toolbar"><div><button aria-label="Previous month" onClick={()=>setYm(v=>v.m===0?{y:v.y-1,m:11}:{...v,m:v.m-1})}>‹</button><strong>{monthName}</strong><button aria-label="Next month" onClick={()=>setYm(v=>v.m===11?{y:v.y+1,m:0}:{...v,m:v.m+1})}>›</button></div><span>{selected?`Click a date to move ${selected}.`:audience==="owner"?"Drag a work order—or click it, then click a new date. Click anything else to open it.":"Sales view · schedule changes are owner controlled."}</span></div>
-    <div className="month-weekdays">{["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(x=><span key={x}>{x}</span>)}</div>
-    <div className="month-calendar">{cells.map((date,index)=>date===null?<div className="month-day outside" key={`empty-${index}`}/>:<div className={`month-day ${iso(date)===todayIso?"today":""}`} key={date} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"&&audience==="owner"&&selected)move(selected,date)}} onDragOver={e=>audience==="owner"&&e.preventDefault()} onDrop={e=>audience==="owner"&&move(e.dataTransfer.getData("text/plain"),date)} onClick={()=>audience==="owner"&&selected&&move(selected,date)}><header><b>{date}</b>{iso(date)===todayIso&&<small>Today</small>}</header><div>{items.filter(x=>x.date===iso(date)).map((item,k)=><button draggable={audience==="owner"&&!!item.wo} onDragStart={e=>e.dataTransfer.setData("text/plain",item.id)} onClick={e=>{e.stopPropagation();if(audience==="owner"&&item.wo&&selected!==item.id)setSelected(item.id);else{setSelected(null);openRecord(item.id)}}} onDoubleClick={e=>{e.stopPropagation();openRecord(item.id)}} className={`${item.type} ${selected===item.id?"moving":""}`} key={item.id+k} title={audience==="owner"&&item.wo?"Click to select, click again to open":"Open"}>{item.title}</button>)}</div></div>)}</div>
-    <div className="calendar-legend"><span><i className="order"/>Customer order</span><span><i className="stock"/>Build stock</span><span><i className="maintenance"/>Maintenance</span><span><i className="delivery"/>Inbound delivery</span></div></>;
-}
+// The production calendar used to live here as a month grid of work orders, beside a separate
+// production plan of steps. They were two schedules for one shop and they disagreed. Both are now one
+// screen — app/components/prodplan.tsx — routed from page.tsx for every role.
 
 export function MyAccount(){const{authUser,signOut,notify,data}=useApp();const[cur,setCur]=useState("");const[pw,setPw]=useState("");const[pw2,setPw2]=useState("");const[open,setOpen]=useState(false);const[err,setErr]=useState("");
   const change=async()=>{setErr("");if(pw.length<8)return setErr("New password needs at least 8 characters");if(pw!==pw2)return setErr("Passwords don't match");try{await authCall({op:"password",current:cur,password:pw});setOpen(false);setCur("");setPw("");setPw2("");notify("Password updated","My account")}catch(e){setErr(e instanceof Error?e.message:"Could not change password")}};

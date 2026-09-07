@@ -3,7 +3,7 @@ import { useState } from "react";
 import { DEFAULT_QC, STAGES, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, documentTotal, orderTotals, stageOf, type WorkOrder, fmtDue} from "../app-data";
 import { Fact, now, num, uid, useApp, usd2 } from "./store";
 
-export const floorNav=["Order flow","Production","Production plan","Pack orders","My account"];
+export const floorNav=["Order flow","Production","Production calendar","Pack orders","My account"];
 const RACK=24;
 
 export function FloorView({nav,line,setLine}:{nav:string;line:string;setLine:(l:string)=>void}){

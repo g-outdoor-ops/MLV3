@@ -18,8 +18,8 @@ to invoicing or payments as touching real money.
 ## The state of play
 
 `main` is deployed and pushed through **`3af0039`**. Committed on top and **not pushed**: `8ff28e0`
-(Phase 3, wholesale orders planned onto the calendar), `ceab059` (the warehouse link), and Phase 4 in
-the tree — the fix for the plan and the run holding two different numbers.
+(Phase 3, wholesale orders onto the calendar), `ceab059` (the warehouse link), `aac91b9` (the plan and
+the run were two records of the same bottles), and Phase 5 in the tree — the two calendars merged.
 
 The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
 The production rebuild is `4b2ed00` (Phase 1, model), `8c0bf42` (Phase 2, the calendar) and Phase 3 in
@@ -222,7 +222,7 @@ involved for a copy in the test file to prove anything about the code that ships
 (the `engines` field still says `>=22.13 <23`, so on 22.13–22.17 those assertions fail loudly rather
 than passing quietly). Worth bumping `engines`, or moving the rest of the suites the same way.
 
-### Phase 4 — the plan and the run are one record (in the tree, uncommitted)
+### Phase 4 — the plan and the run are one record (`aac91b9`)
 
 **This was a real defect and it was mine.** A mould step and the work order carrying it out were two
 independent records of the same bottles: the plan stored `actualQty`, the run stored `good`, nothing
@@ -248,15 +248,38 @@ under each, so the same 24 bottles could be counted twice.
 - `Machine.line` was added because machines and lines were two vocabularies for one physical thing —
   which is how a run raised against a machine could land on a line nobody was looking at.
 
-### Still open on Phase 4
+### Phase 5 — one production calendar (in the tree, uncommitted)
 
-- **Two production calendars remain.** *Production calendar* (the month grid) draws work orders;
-  *Production plan* draws steps. They now agree about numbers, but they are still two screens showing
-  overlapping work, and the month grid knows nothing about steps. Merging them is the obvious next move
-  and was not attempted here.
-- **Assembly, palletizing and shipping steps have no run**, so they keep their own record. That is
-  correct today — no work order models them — but it means "who recorded this" comes from two places
-  depending on the step type.
+The month grid and the day list were two screens drawing overlapping work. They are one screen now —
+**Production calendar**, `app/components/prodplan.tsx`, routed from `page.tsx` for every role. The old
+`ProductionCalendar` in `sales.tsx` is deleted; "Production plan" is gone from the navs.
+
+One screen, two readings of the same calendar, on a toggle:
+
+- **Month** — the grid, with each day's machine load drawn in the cell and over-capacity days tinted.
+  It carries everything that was only ever on the old calendar (runs, maintenance, inbound deliveries,
+  the dates orders are needed) *and* the plan's steps. A cell shows three chips then a count, because a
+  month cell is for scanning; clicking a day opens its full card underneath, which is where the buttons
+  that actually do something live.
+- **Day by day** — the list, unchanged. The floor opens on this one: a tablet in a warehouse wants
+  today, not a grid.
+
+A run that is carrying out planned steps is **not** drawn separately — its steps already name it, and
+drawing both is what made the two screens look like different schedules in the first place. Dragging
+works for runs and for steps: a run that is already turning refuses to move, and a step the floor has
+started has to answer `guardStepEdit` first. There are two write paths for a step edit now, and
+`tests/production.test.mjs` checks that *each* of them asks the guard before it writes.
+
+Sales gets the same screen read-only (it keys off `role`, as before). `calendar.move` moved from
+`sales.tsx` to `prodplan.tsx`, so `tests/rendered-html.test.mjs` reads that file too now.
+
+### Still open
+
+- **Assembly, palletizing and shipping steps have no run**, so they keep their own record. Correct today
+  — no work order models them — but it means "who recorded this" comes from two places depending on the
+  step type.
+- The month cell caps at three chips. On a heavy day that hides real work behind "+2 more"; the day card
+  below shows everything, but somebody scanning the grid for a clash could miss one.
 
 ### The warehouse link (`ceab059`)
 
@@ -319,7 +342,7 @@ on Render before the tablet is handed over.
 
 - **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
   `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
-  Run with `node tests/<name>.test.mjs`. 241 assertions.
+  Run with `node tests/<name>.test.mjs`. 247 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.

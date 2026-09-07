@@ -12,11 +12,11 @@
 //  · Nothing the floor has already made may be edited away silently. Every edit runs guardStepEdit
 //    first and, when it has something to say, the person has to answer it before the change lands.
 import { useState } from "react";
-import { DEFAULT_BLANKS, DEFAULT_MACHINES, DEFAULT_SKUS, addSteps, dayLoad, fmtDue, guardStepEdit, orderNeeds, ordersToPlan, planOrder, planTotals, reconcileStep, recordStep, runFromSteps, runSteps, stepProgress, stepTargetName, todayIso,
-  type AppData, type MachineLoad, type OrderRecord, type ProdDay, type ProdSource, type ProdStep } from "../app-data";
+import { DEFAULT_BLANKS, DEFAULT_MACHINES, DEFAULT_SKUS, STAGE_SHIPPED, addSteps, dayLoad, dueIso, fmtDue, stageOf, guardStepEdit, orderNeeds, ordersToPlan, planOrder, planTotals, reconcileStep, recordStep, runFromSteps, runSteps, stepProgress, stepTargetName, todayIso,
+  type AppData, type Blank, type Machine, type MachineLoad, type OrderRecord, type ProdDay, type ProdSource, type ProdStep, type WorkOrder } from "../app-data";
 import { Kpi, nextId, num, uid, useApp } from "./store";
 
-export const PRODUCTION_PLAN="Production plan";
+export const PRODUCTION_CALENDAR="Production calendar";
 
 const TYPES:ProdStep["type"][]=["mold","assemble","palletize","ship"];
 const TYPE_LABEL:Record<ProdStep["type"],string>={mold:"Mould",assemble:"Assemble",palletize:"Palletize",ship:"Ship"};
@@ -24,8 +24,8 @@ const SOURCE_LABEL:Record<ProdSource,string>={amazon:"Amazon",wholesale:"Wholesa
 const monthOf=(iso:string)=>iso.slice(0,7);
 const monthKey=(y:number,m:number)=>`${y}-${String(m+1).padStart(2,"0")}`;
 
-export function ProductionPlanView(){
-  const {data,commit,notify,openRecord,role,user}=useApp();
+export function ProductionCalendarView(){
+  const {data,commit,notify,openRecord,setModal,role,user}=useApp();
   const owner=role==="owner";
   const blanks=data.blanks?.length?data.blanks:DEFAULT_BLANKS;
   const skus=data.skus?.length?data.skus:DEFAULT_SKUS;
@@ -42,6 +42,13 @@ export function ProductionPlanView(){
     return open[0]||now;
   });
   const [filter,setFilter]=useState<"all"|ProdSource>("all");
+  // The month grid answers "what does the month look like", the day list answers "what do I do now".
+  // They were two screens; they are two readings of one calendar. The floor opens on the list because a
+  // tablet in a warehouse wants today, not a grid.
+  const [view,setView]=useState<"month"|"list">(role==="floor"?"list":"month");
+  const [selected,setSelected]=useState<string>(todayIso());
+  const [moving,setMoving]=useState<string|null>(null);   // the run or step picked up to be moved
+  const waiting=(data.workOrders||[]).filter(w=>w.status==="Needs scheduling");
   const [editing,setEditing]=useState<string|null>(null);
   const [recording,setRecording]=useState<string|null>(null);
   const [reconciling,setReconciling]=useState<string|null>(null);
@@ -77,36 +84,67 @@ export function ProductionPlanView(){
     const covered=runSteps(st,all);
     const id=nextId("WO-",runs.map(w=>w.id),116);
     const work=runFromSteps(covered,data,id,day.date);
-    if(!work){notify("Only moulding runs on a machine — this step has no run to raise",PRODUCTION_PLAN,true);return}
+    if(!work){notify("Only moulding runs on a machine — this step has no run to raise",PRODUCTION_CALENDAR,true);return}
     const ids=new Set(covered.map(c=>c.id));
     commit(v=>({...v,
       workOrders:[...(v.workOrders||[]),work],
       prodDays:(v.prodDays||[]).map(d=>({...d,steps:(d.steps||[]).map(x=>ids.has(x.id)?{...x,workOrderId:id}:x)})),
     }),"plan.run",`${id} raised from the plan · ${work.quantity}`);
-    notify(`${id} sent to the floor — ${num(work.quantity)} on ${work.line}${covered.length>1?` over ${covered.length} days`:""}`,PRODUCTION_PLAN);
+    notify(`${id} sent to the floor — ${num(work.quantity)} on ${work.line}${covered.length>1?` over ${covered.length} days`:""}`,PRODUCTION_CALENDAR);
+  };
+
+  /**
+   * Move whatever was picked up to another day. A work order and a production step are moved by
+   * different rules — a run that is already turning cannot be dragged, and a step the floor has started
+   * has to answer the guard first — so this dispatches rather than pretending they are the same thing.
+   */
+  const moveTo=(id:string,date:string)=>{
+    setMoving(null);
+    const run=runs.find(w=>w.id===id);
+    if(run){
+      if(run.status==="Running"||run.status==="Done"){notify(`${run.id} is ${run.status.toLowerCase()} and cannot be moved`,PRODUCTION_CALENDAR,true);return}
+      commit(v=>({...v,workOrders:v.workOrders.map(w=>w.id===id?{...w,date,status:w.status==="Needs scheduling"?"Scheduled":w.status}:w)}),"calendar.move",`${id} moved to ${date}`);
+      notify(`${id} moved to ${fmtDue(date)}`,PRODUCTION_CALENDAR);
+      return;
+    }
+    const from=all.find(d=>(d.steps||[]).some(x=>x.id===id));
+    const step=from&&from.steps.find(x=>x.id===id);
+    if(!step||from.date===date)return;
+    if(step.workOrderId){notify(`${step.id} is being run as ${step.workOrderId} — move the run, not the day`,PRODUCTION_CALENDAR,true);return}
+    // Ask first, then decide — the same order the code reads in, so it stays obvious that nothing is
+    // written before the guard has had its say.
+    const message=guardStepEdit(step,{});
+    const apply=()=>{writeDays(ds=>relocate(ds,step,date),"plan.step.edit",`${step.id} moved to ${date}`);setPending(null)};
+    if(message)setPending({message,confirm:apply});else apply();
   };
 
   const record=(st:ProdStep,made:number,scrap:number)=>{
     patchStep(st.id,x=>recordStep(x,made,user||"Warehouse",scrap),"plan.record",`${st.id} · ${made} made`);
     setRecording(null);
-    notify(`${num(made)} recorded on ${TYPE_LABEL[st.type].toLowerCase()} ${stepTargetName(st,blanks,skus)}`,PRODUCTION_PLAN);
+    notify(`${num(made)} recorded on ${TYPE_LABEL[st.type].toLowerCase()} ${stepTargetName(st,blanks,skus)}`,PRODUCTION_CALENDAR);
   };
   // The other direction: the floor made units and never logged them, so the owner sets the record
   // straight. reconcileStep stamps who corrected it rather than pretending the floor entered it.
   const reconcile=(st:ProdStep,made:number)=>{
     patchStep(st.id,x=>reconcileStep(x,made,user||"Owner"),"plan.reconcile",`${st.id} reconciled to ${made}`);
     setReconciling(null);
-    notify(`${stepTargetName(st,blanks,skus)} corrected to ${num(made)} made — recorded by ${user||"the owner"}`,PRODUCTION_PLAN);
+    notify(`${stepTargetName(st,blanks,skus)} corrected to ${num(made)} made — recorded by ${user||"the owner"}`,PRODUCTION_CALENDAR);
   };
 
   return <section className="view">
     <div className="heading-row">
       <div>
         <p className="eyebrow">Amazon and wholesale on the same two machines</p>
-        <h1>Production plan</h1>
-        <p className="intro">Every step of the month, and what each day asks of the 5-gallon and 3-gallon lines. The two cannot cover for each other, so a day is over capacity when either one is.</p>
+        <h1>Production calendar</h1>
+        <p className="intro">Every step, run, delivery and due date on one schedule — and what each day asks of the 5-gallon and 3-gallon lines. The two cannot cover for each other, so a day is over capacity when either one is.</p>
       </div>
+      {owner&&<button className="primary" onClick={()=>setModal("workorder")}>+ Work order</button>}
     </div>
+
+    {owner&&waiting.length>0&&<div className="company-health" style={{marginBottom:12}}>
+      <span><i className="health-dot" style={{background:"#cf6822"}}/>Waiting for a slot: <b>{waiting.map(w=>`${w.id} (${num(w.quantity)} × ${w.item.split(" · ")[0]})`).join(", ")}</b></span>
+      <small>{waiting.map(w=><button key={w.id} className="link-button" onClick={()=>setMoving(w.id)}>Place {w.id}</button>)}</small>
+    </div>}
 
     <div className="plan-toolbar">
       <div className="plan-month">
@@ -115,10 +153,14 @@ export function ProductionPlanView(){
         <button aria-label="Next month" onClick={()=>stepMonth(1)}>›</button>
       </div>
       <div className="segmented">
+        <button className={view==="month"?"active":""} onClick={()=>setView("month")}>Month</button>
+        <button className={view==="list"?"active":""} onClick={()=>setView("list")}>Day by day</button>
+      </div>
+      <div className="segmented">
         {(["all","amazon","wholesale"] as const).map(f=>
           <button key={f} className={filter===f?"active":""} onClick={()=>setFilter(f)}>{f==="all"?"Both":SOURCE_LABEL[f]}</button>)}
       </div>
-      <span className="plan-toolbar-note">{filter==="all"?"Machine load always counts both — filtering hides steps, never the load.":`Showing ${SOURCE_LABEL[filter as ProdSource].toLowerCase()} steps. The bars still count every step on the day.`}</span>
+      <span className="plan-toolbar-note">{moving?`Click a day to move ${moving}. `:""}{filter==="all"?"Machine load always counts both — filtering hides steps, never the load.":`Showing ${SOURCE_LABEL[filter as ProdSource].toLowerCase()} steps. The bars still count every step on the day.`}</span>
     </div>
 
     <div className="recap four">
@@ -145,10 +187,16 @@ export function ProductionPlanView(){
 
     {owner&&<UnplannedOrders data={data} onPlan={(o,entries,summary)=>{
       writeDays(ds=>addSteps(ds,entries),"plan.order",`${o.id} planned · ${entries.length} steps`);
-      notify(`${o.id} is on the production plan — ${summary}`,PRODUCTION_PLAN);
+      notify(`${o.id} is on the production plan — ${summary}`,PRODUCTION_CALENDAR);
     }}/>}
 
-    {days.length?days.map(day=>{
+    {view==="month"
+      ?<MonthGrid ym={ym} days={days} data={data} blanks={blanks} machines={machines} runs={runs} everyStep={everyStep}
+          filter={filter} owner={owner} selected={selected} moving={moving} setMoving={setMoving}
+          onPick={setSelected} onOpen={openRecord} onMove={moveTo}/>
+      :null}
+    {(view==="month"?days.filter(d=>d.date===selected):days).length
+      ?(view==="month"?days.filter(d=>d.date===selected):days).map(day=>{
       const loads=dayLoad(day,blanks,machines,runs,everyStep);
       const over=loads.some(l=>l.over>0);
       const shown=day.steps.filter(s=>filter==="all"||s.source===filter);
@@ -231,8 +279,99 @@ export function ProductionPlanView(){
           }):<p className="plan-empty">{day.steps.length?`Nothing ${SOURCE_LABEL[filter as ProdSource].toLowerCase()} on this day.`:"No steps on this day."}</p>}
         </div>
       </article>;
-    }):<article className="panel"><p className="empty-list">Nothing planned for {monthLabel}.</p></article>}
+    }):<article className="panel"><p className="empty-list">{view==="month"?`Nothing planned on ${fmtDue(selected)}.${owner?" Pick another day, or add a step from its cell.":""}`:`Nothing planned for ${monthLabel}.`}</p></article>}
+
+    <div className="calendar-legend">
+      <span><i className="step-amazon"/>Amazon step</span><span><i className="step-wholesale"/>Wholesale step</span>
+      <span><i className="order"/>Run · customer order</span><span><i className="stock"/>Run · build stock</span>
+      <span><i className="maintenance"/>Maintenance</span><span><i className="delivery"/>Inbound delivery</span>
+    </div>
   </section>;
+}
+
+/**
+ * The month at a glance.
+ *
+ * This is the old production calendar and the production plan as one grid. It draws what each day is
+ * asking of the two machines, the steps planned on it, and the things that were only ever on the old
+ * calendar — runs, maintenance, inbound deliveries and the dates orders are needed. A run that is
+ * carrying out planned steps is NOT drawn separately: its steps already name it, and drawing both is
+ * what made the two screens look like different schedules.
+ */
+const SHOWN=3;                      // chips a month cell shows before it starts counting
+function MonthGrid({ym,days,data,blanks,machines,runs,everyStep,filter,owner,selected,moving,setMoving,onPick,onOpen,onMove}:{
+  ym:string;days:ProdDay[];data:AppData;blanks:Blank[];machines:Machine[];runs:WorkOrder[];everyStep:ProdStep[];
+  filter:"all"|ProdSource;owner:boolean;selected:string;moving:string|null;setMoving:(v:string|null)=>void;
+  onPick:(date:string)=>void;onOpen:(id:string)=>void;onMove:(id:string,date:string)=>void;
+}){
+  const [y,m]=ym.split("-").map(Number);
+  const first=new Date(Date.UTC(y,m-1,1)).getUTCDay();
+  const count=new Date(Date.UTC(y,m,0)).getUTCDate();
+  const cells=[...Array(first).fill(null),...Array.from({length:count},(_,i)=>i+1)];
+  const iso=(d:number)=>`${ym}-${String(d).padStart(2,"0")}`;
+  const today=todayIso();
+
+  // Runs with steps are represented by those steps; only a run nobody planned gets its own chip.
+  const plannedRunIds=new Set(everyStep.map(s=>s.workOrderId).filter(Boolean) as string[]);
+  const runChips=runs.filter(w=>w.status!=="Needs scheduling"&&w.status!=="Done"&&!plannedRunIds.has(w.id))
+    .flatMap(w=>Array.from({length:w.days||1},(_,k)=>{
+      const d=new Date(w.date+"T12:00:00Z");d.setUTCDate(d.getUTCDate()+k);
+      const order=data.orders.find(o=>o.id===w.orderId);
+      return {id:w.id,date:d.toISOString().slice(0,10),cls:w.orderId?"order":"stock",drag:true,
+        title:`${w.id} · ${w.item.split(" · ")[0]}${order?` · ${data.customers.find(c=>c.id===order.customerId)?.name.split(" ")[0]}`:""}${k?" (cont.)":""}`};
+    }));
+  const other=[
+    ...(data.maintenance||[]).filter(x=>x.status!=="Complete")
+      .map(x=>({id:x.id,date:dueIso(x.due),cls:"maintenance",drag:false,title:`${x.machine} · ${x.task}`})),
+    ...(data.purchaseOrders||[]).filter(p=>p.status==="Open")
+      .map(p=>({id:p.id,date:dueIso(p.eta.replace(/\s*\(.*\)/,"")),cls:"delivery",drag:false,title:`${p.id} · ${p.item.split(" · ")[0]} · ${num(p.quantity)}`})),
+    ...data.orders.filter(o=>stageOf(o)<STAGE_SHIPPED)
+      .map(o=>({id:o.id,date:dueIso(o.due),cls:"due",drag:false,title:`Needed · ${o.id} · ${data.customers.find(c=>c.id===o.customerId)?.name.split(" ")[0]||""}`})),
+  ].filter(x=>x.date) as {id:string;date:string;cls:string;drag:boolean;title:string}[];
+
+  return <>
+    <div className="month-weekdays">{["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(x=><span key={x}>{x}</span>)}</div>
+    <div className="month-calendar plan-month-grid">{cells.map((date,index)=>{
+      if(date===null)return <div className="month-day outside" key={`empty-${index}`}/>;
+      const key=iso(date);
+      const day=days.find(d=>d.date===key);
+      const loads=day?dayLoad(day,blanks,machines,runs,everyStep):[];
+      const over=loads.some(l=>l.over>0);
+      const steps=(day?.steps||[]).filter(s=>filter==="all"||s.source===filter);
+      const chips=[
+        ...steps.map(st=>({key:st.id,id:st.id,cls:`step-${st.source}`,drag:owner&&!st.workOrderId,step:st,
+          title:`${TYPE_LABEL[st.type]} ${num(st.qty)} · ${stepTargetName(st,blanks,data.skus||[])}`})),
+        ...runChips.filter(x=>x.date===key).map((x,k)=>({key:x.id+k,id:x.id,cls:x.cls,drag:x.drag,step:undefined,title:x.title})),
+        ...other.filter(x=>x.date===key).map((x,k)=>({key:x.id+k,id:x.id,cls:x.cls,drag:x.drag,step:undefined,title:x.title})),
+      ] as {key:string;id:string;cls:string;drag:boolean;step?:ProdStep;title:string}[];
+      return <div key={key} role="button" tabIndex={0}
+        className={`month-day${key===today?" today":""}${key===selected?" picked":""}${over?" over":""}`}
+        onKeyDown={e=>{if(e.key!=="Enter")return;if(moving)onMove(moving,key);else onPick(key)}}
+        onDragOver={e=>{if(owner)e.preventDefault()}}
+        onDrop={e=>{if(owner)onMove(e.dataTransfer.getData("text/plain"),key)}}
+        onClick={()=>moving&&owner?onMove(moving,key):onPick(key)}>
+        <header><b>{date}</b>{key===today&&<small>Today</small>}</header>
+        {loads.filter(l=>l.units>0).map(l=><div key={l.machine.id} className={`month-load${l.over?" over":""}`}>
+          <i style={{width:`${Math.min(100,Math.round(l.units/l.capacity*100))}%`}}/>
+          <span>{num(l.units)}/{num(l.capacity)}</span>
+        </div>)}
+        {/* A month cell is for scanning, not reading. Three chips, then a count — the day's full
+            detail is the card below, which is where the buttons that do anything live. */}
+        <div>
+          {chips.slice(0,SHOWN).map(c=>c.step
+            ?<button key={c.key} className={`step-${c.step.source}${moving===c.step.id?" moving":""}`}
+              draggable={owner&&!c.step.workOrderId} onDragStart={e=>e.dataTransfer.setData("text/plain",c.step!.id)}
+              title={c.step.workOrderId?`On run ${c.step.workOrderId}`:"Open this day"}
+              onClick={e=>{e.stopPropagation();onPick(key)}}>{c.title}</button>
+            :<button key={c.key} className={`${c.cls}${moving===c.id?" moving":""}`}
+              draggable={owner&&c.drag} onDragStart={e=>e.dataTransfer.setData("text/plain",c.id)}
+              onClick={e=>{e.stopPropagation();if(owner&&c.drag&&moving!==c.id)setMoving(c.id);else{setMoving(null);onOpen(c.id)}}}
+              title={owner&&c.drag?"Click to pick up, again to open":"Open"}>{c.title}</button>)}
+          {chips.length>SHOWN&&<button className="month-more" onClick={e=>{e.stopPropagation();onPick(key)}}>+{chips.length-SHOWN} more</button>}
+        </div>
+      </div>;
+    })}</div>
+  </>;
 }
 
 /**

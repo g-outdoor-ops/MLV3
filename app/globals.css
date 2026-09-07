@@ -239,3 +239,20 @@
 .floor-link-enter-actions button{flex:1;min-height:52px;border-radius:10px}
 .floor-link-runref{margin:9px 0 0;color:#5d6b62;font-weight:700;font-size:.85rem;
   background:#f1f4f2;border-radius:9px;padding:10px 12px}
+
+/* The month grid, now that it carries plan steps and their machine load as well as
+   runs, deliveries and due dates. */
+.plan-month-grid .month-day.picked{outline:2px solid #145c3d;outline-offset:-2px}
+.plan-month-grid .month-day.over{background:#fdf2f0}
+.month-load{display:flex;align-items:center;gap:6px;margin:4px 0 2px;height:12px}
+.month-load i{display:block;height:5px;border-radius:3px;background:#5a6fd8;flex:0 0 auto;min-width:2px}
+.month-load span{font-size:9px;color:#7b8880;font-variant-numeric:tabular-nums;white-space:nowrap}
+.month-load.over i{background:#b3261e}
+.month-load.over span{color:#b3261e;font-weight:800}
+.plan-month-grid .month-day > div > button.step-amazon{border-left-color:#5a6fd8;background:#eef0fc}
+.plan-month-grid .month-day > div > button.step-wholesale{border-left-color:#d9a02b;background:#fdf6e8}
+.plan-month-grid .month-day > div > button.due{border-left-color:#6d7a70;background:#f2f5f3}
+.calendar-legend i.step-amazon{background:#5a6fd8}
+.calendar-legend i.step-wholesale{background:#d9a02b}
+.month-more{border:0!important;background:transparent!important;color:#5d6b62!important;font-size:10px!important;
+  font-weight:800;padding:3px 4px!important;text-align:left}

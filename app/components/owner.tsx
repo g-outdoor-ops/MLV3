@@ -3,11 +3,11 @@ import { useEffect, useState } from "react";
 import { newFloorToken, STAGES, STAGE_NEW, STAGE_QUOTED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, documentTotal, dueDays, freeStock, orderTotals, seedData, stageOf, hasDemoData, type InventoryRow } from "../app-data";
 import { authCall, qboCall, type AuthUser } from "./auth";
 import { CheckRow, ControlMetric, Decision, Kpi, MiniRow, PlRow, ReportCard, SettingRow, StatusLine, downloadCsv, num, useApp, usd, usd2 } from "./store";
-import { Customers, DocList, Leads, OrdersPage, ProductionCalendar } from "./sales";
+import { Customers, DocList, Leads, OrdersPage } from "./sales";
 
 export const ownerGroups=[
   {label:"Sales & customers",items:["Order flow","Customers","Leads","Orders","Invoices","Quotes"]},
-  {label:"Production",items:["Work orders","Production plan","Production calendar","Quality","Maintenance"]},
+  {label:"Production",items:["Work orders","Production calendar","Quality","Maintenance"]},
   {label:"Inventory & purchasing",items:["Inventory","Purchasing","Item rates"]},
   {label:"Financials",items:["Profit & loss","Reports"]},
   {label:"Administration",items:["Settings & access"]},
@@ -20,7 +20,6 @@ export function OwnerView({nav}:{nav:string}){
   if(nav==="Invoices")return <DocList kind="invoice"/>;
   if(nav==="Quotes")return <DocList kind="quote"/>;
   if(nav==="Work orders")return <WorkOrders/>;
-  if(nav==="Production calendar")return <ProductionCalendar audience="owner"/>;
   if(nav==="Item rates")return <ItemRates/>;
   if(nav==="Inventory")return <InventoryWorkspace/>;
   if(nav==="Quality")return <QualityWorkspace/>;
