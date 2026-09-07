@@ -19,11 +19,73 @@ export type Activity={id:string;customerId?:string;title:string;detail:string;ac
 export type RoleSetting={id:string;name:string;members:string[];permissions:Record<string,"none"|"view"|"edit">};
 export type ItemRate={id:string;item:string;rate:number;minimum:number;discountLimit:number;floor?:number;unitsPerCase?:number;kind?:"finished"|"raw";cost?:number;sub?:string;qcChecks?:string[];material?:string};
 export type InventoryRow={id:string;item:string;onHand:number;committed:number;reorder:number;cost:number;kind?:"finished"|"raw";unit?:string;onOrder?:number;eta?:string;usage?:string;supplier?:string};
+
+// ---- what this shop actually makes -------------------------------------------------
+// One molded bottle becomes several different products depending on what happens after
+// moulding. "Regular 5-gal" is the shared blank behind GO, BV and MV — the difference is
+// only which caps go on at assembly.
+//
+// The important subtlety, from the SKU list: a blank is itself sellable. Wholesale buys
+// plain 3-gallon and 5-gallon bottles with no kitting at all, and GO-WAAU-08PA is the
+// bare 5-gallon bottle listed on Amazon. So "blank" and "finished good" are not exclusive
+// categories — a blank is a product in its own right AND the input to other products.
+// Modelling them as separate kinds would force the same bottle to exist twice and the two
+// copies would drift. Instead: every Blank is stock that moulding produces, and any SKU
+// that needs work after moulding carries an Assembly recipe pointing at its blank.
+export type Blank={
+  id:string;name:string;              // "Regular 5-gal"
+  size:"3-gal"|"5-gal";               // decides which machine makes it
+  neck:"screw"|"regular";             // screw-top vs regular neck — a mould change
+  sellable?:boolean;                  // sold to wholesale as a plain bottle
+};
+export type AssemblyCap={component:string;qty:number};   // "Screw cap" × 2
+export type Sku={
+  id:string;name:string;              // "D5-T0WT-Q5XP", "5 Gal + 2 Screw Caps"
+  channel:"amazon"|"wholesale"|"both";
+  blankId:string;                     // what gets moulded first
+  caps:AssemblyCap[];                 // empty for a bottle-only listing, which still gets
+                                      // labelled and boxed, so it is still an assembly step
+  unitsPerPalletLtl?:number;          // trailer door limits differ — LTL fits fewer
+  unitsPerPalletFtl?:number;
+};
+
+// Two machines, one per bottle size, running in parallel. 500 bottles each on a six-hour
+// shift. They do not share capacity: a heavy 5-gallon week cannot borrow the 3-gallon
+// machine, which is exactly the constraint a plan has to respect.
+export type Machine={id:string;name:string;makes:"3-gal"|"5-gal";perShift:number};
+// The real catalogue. Four blanks, six Amazon SKUs, and the plain bottles wholesale buys.
+export const DEFAULT_BLANKS:Blank[]=[
+  {id:"b-s5",name:"Screw-top 5-gal",size:"5-gal",neck:"screw"},
+  {id:"b-s3",name:"Screw-top 3-gal",size:"3-gal",neck:"screw"},
+  // Both regular blanks are sold plain to wholesale as well as feeding the kitted SKUs.
+  {id:"b-r5",name:"Regular 5-gal",size:"5-gal",neck:"regular",sellable:true},
+  {id:"b-r3",name:"Regular 3-gal",size:"3-gal",neck:"regular",sellable:true},
+];
+export const DEFAULT_SKUS:Sku[]=[
+  {id:"D5-T0WT-Q5XP",name:"5 Gal + 2 Screw Caps",channel:"amazon",blankId:"b-s5",
+    caps:[{component:"Screw cap",qty:2}],unitsPerPalletLtl:80,unitsPerPalletFtl:96},
+  {id:"MI-89OO-OBNM",name:"3 Gal + 2 Screw Caps",channel:"amazon",blankId:"b-s3",
+    caps:[{component:"Screw cap",qty:2}],unitsPerPalletLtl:150,unitsPerPalletFtl:180},
+  // Bottle only. No caps, but it is still labelled and boxed, so assembly still happens.
+  {id:"GO-WAAU-08PA",name:"5 Gal Bottle Only",channel:"amazon",blankId:"b-r5",
+    caps:[],unitsPerPalletLtl:80,unitsPerPalletFtl:96},
+  {id:"BV-B81Q-X4UN",name:"5 Gal + 2 Silicone Caps",channel:"amazon",blankId:"b-r5",
+    caps:[{component:"Silicone cap",qty:2}],unitsPerPalletLtl:80,unitsPerPalletFtl:96},
+  {id:"MV-1AA8-B2UV",name:"5 Gal + 1 Silicone Cap",channel:"amazon",blankId:"b-r5",
+    caps:[{component:"Silicone cap",qty:1}],unitsPerPalletLtl:80,unitsPerPalletFtl:96},
+  {id:"ZR-4HHD-8YRL",name:"3 Gal + 1 Silicone Cap",channel:"amazon",blankId:"b-r3",
+    caps:[{component:"Silicone cap",qty:1}],unitsPerPalletLtl:150,unitsPerPalletFtl:180},
+];
+
+export const DEFAULT_MACHINES:Machine[]=[
+  {id:"m5",name:"5-gallon line",makes:"5-gal",perShift:500},
+  {id:"m3",name:"3-gallon line",makes:"3-gal",perShift:500},
+];
 export type ShipMethod={id:string;name:string;sub:string;rate:number;perCase?:number;custom?:boolean};
 export type MaintenanceItem={id:string;machine:string;task:string;due:string;status:"Due"|"Scheduled"|"Complete";downtimeMin?:number;notes?:string};
 export type PurchaseOrder={id:string;supplier:string;item:string;quantity:number;unitCost:number;freight:number;duty:number;eta:string;status:"Open"|"Received"|"Cancelled";createdAt:string;receivedAt?:string};
-export type AppData={customers:Customer[];documents:DocumentRecord[];orders:OrderRecord[];workOrders:WorkOrder[];calendar:CalendarEvent[];notices:Notice[];activities:Activity[];roles:RoleSetting[];itemRates:ItemRate[];inventory:InventoryRow[];maintenance?:MaintenanceItem[];purchaseOrders?:PurchaseOrder[];
-  settings:{company:string;ownerName:string;ownerEmail:string;warehouseToken:string;lines?:string[];shipMethods?:ShipMethod[];discountApproval?:number;monthlyExpenses?:number;cashOnHand?:number;quickBooks:{connected:boolean;realmId:string;lastSync:string;customers:boolean;invoices:boolean;quotes:boolean;conflicts:number}}};
+export type AppData={blanks?:Blank[];skus?:Sku[];customers:Customer[];documents:DocumentRecord[];orders:OrderRecord[];workOrders:WorkOrder[];calendar:CalendarEvent[];notices:Notice[];activities:Activity[];roles:RoleSetting[];itemRates:ItemRate[];inventory:InventoryRow[];maintenance?:MaintenanceItem[];purchaseOrders?:PurchaseOrder[];
+  settings:{company:string;ownerName:string;ownerEmail:string;warehouseToken:string;lines?:string[];machines?:Machine[];shipMethods?:ShipMethod[];discountApproval?:number;monthlyExpenses?:number;cashOnHand?:number;quickBooks:{connected:boolean;realmId:string;lastSync:string;customers:boolean;invoices:boolean;quotes:boolean;conflicts:number}}};
 
 // The stages the shop actually works in. The old list ran Placed → In production → … → Invoiced →
 // Paid, i.e. make first and bill last, which is backwards for this business: nothing goes on a machine
@@ -178,6 +240,97 @@ export function migrateStage(o:OrderRecord):number{
 }
 export const stageOf=(o:OrderRecord)=>o.stage!=null?o.stage:Math.max(0,STAGES.findIndex(s=>s.toLowerCase()===o.status.toLowerCase()));
 export const freeStock=(row:InventoryRow)=>row.onHand-row.committed;
+
+// ---- production steps, and protecting what the floor already did -------------------
+// A planned step becomes a record of what actually happened. Both live on the same object
+// so the plan and the truth can be compared rather than one silently replacing the other.
+export type ProdStep={
+  id:string;type:"mold"|"assemble"|"palletize"|"ship";
+  target:string;                       // blank id for mould, sku id for the rest
+  qty:number;                          // planned
+  note?:string;linkedTo?:string;       // order or shipment
+  machineId?:string;
+  // filled in by the floor, or by the owner reconciling after the fact
+  done?:boolean;actualQty?:number;scrap?:number;doneAt?:string;doneBy?:string;
+  reconciledBy?:string;reconciledAt?:string;
+};
+export type ProdDay={date:string;forWhat?:string;milestone?:boolean;steps:ProdStep[]};
+
+export const stepStarted=(st:ProdStep)=>!!(st.done||(st.actualQty??0)>0);
+
+/**
+ * Whether an edit to a planned step needs confirming first.
+ *
+ * The floor and the office both touch these. If the warehouse has already moulded 200 of a
+ * planned 300 and the owner then drags that step to next week or changes the quantity, the
+ * app must not quietly discard what was made — those bottles physically exist. Equally the
+ * owner has to be able to correct the record when the floor made something and never
+ * ticked it. So: never block the edit, always surface what is already true, and make the
+ * person choose knowingly.
+ *
+ * Returns null when the edit is unremarkable.
+ */
+export function guardStepEdit(prev:ProdStep,next:Partial<ProdStep>):string|null{
+  if(!stepStarted(prev))return null;
+  const made=prev.actualQty??(prev.done?prev.qty:0);
+  const when=prev.doneAt?` on ${fmtDue(prev.doneAt)}`:"";
+  const who=prev.doneBy?` by ${prev.doneBy}`:"";
+  const preamble=`Production has already started on this step — ${made} completed${when}${who}.`;
+  if(next.qty!=null&&next.qty!==prev.qty){
+    if(next.qty<made)return `${preamble} Lowering the plan to ${next.qty} is below what was already made. Keep the original, or edit and accept the ${made} already produced?`;
+    return `${preamble} Change the planned quantity from ${prev.qty} to ${next.qty}?`;
+  }
+  if(next.type&&next.type!==prev.type)return `${preamble} Changing the step type will not undo it. Continue?`;
+  if(next.target&&next.target!==prev.target)return `${preamble} Changing what this step makes will not undo what was already produced. Continue?`;
+  return `${preamble} Move or edit it anyway?`;
+}
+
+/** Owner reconciling the record: the floor made units and never recorded them. */
+export function reconcileStep(st:ProdStep,actualQty:number,by:string):ProdStep{
+  const qty=Math.max(0,actualQty);
+  return {...st,actualQty:qty,done:qty>=st.qty,
+    doneAt:st.doneAt||new Date().toISOString().slice(0,10),
+    doneBy:st.doneBy||by,reconciledBy:by,reconciledAt:new Date().toISOString().slice(0,10)};
+}
+
+// ---- planning maths ---------------------------------------------------------------
+// How many blanks a set of SKU quantities needs, rolled up per blank. This is the question
+// nothing could answer before: GO, BV and MV all draw on the same regular 5-gallon blank,
+// so planning them separately hides the real moulding load.
+export function blanksNeeded(want:{skuId:string;qty:number}[],skus:Sku[]):Record<string,number>{
+  const out:Record<string,number>={};
+  for(const w of want){
+    const sku=skus.find(s=>s.id===w.skuId);if(!sku)continue;
+    out[sku.blankId]=(out[sku.blankId]||0)+w.qty;
+  }
+  return out;
+}
+// Caps consumed at assembly, rolled up by component.
+export function capsNeeded(want:{skuId:string;qty:number}[],skus:Sku[]):Record<string,number>{
+  const out:Record<string,number>={};
+  for(const w of want){
+    const sku=skus.find(s=>s.id===w.skuId);if(!sku)continue;
+    for(const c of sku.caps)out[c.component]=(out[c.component]||0)+c.qty*w.qty;
+  }
+  return out;
+}
+// Days of moulding a blank load implies. The two machines run in parallel and cannot cover
+// for each other, so 5-gallon and 3-gallon demand are counted separately and the answer is
+// whichever takes longer — not the total divided by combined capacity.
+export function mouldDays(blankLoad:Record<string,number>,blanks:Blank[],machines:Machine[]){
+  const bySize:Record<string,number>={"3-gal":0,"5-gal":0};
+  for(const [id,qty] of Object.entries(blankLoad)){
+    const b=blanks.find(x=>x.id===id);if(!b)continue;
+    bySize[b.size]=(bySize[b.size]||0)+qty;
+  }
+  const per=(size:string)=>machines.find(m=>m.makes===size)?.perShift||0;
+  const days:Record<string,number>={};
+  for(const size of Object.keys(bySize)){
+    const cap=per(size);
+    days[size]=cap>0?Math.ceil(bySize[size]/cap):0;
+  }
+  return {unitsBySize:bySize,daysBySize:days,days:Math.max(...Object.values(days),0)};
+}
 export const fmtDay=(d:Date)=>d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
 
 /** Fill in fields the old UI never saved so the new screens always have what they need. */
