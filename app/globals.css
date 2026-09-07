@@ -283,3 +283,25 @@
 .order-estimate > div small{display:block;color:#6d7a70;font-size:.8rem}
 .order-estimate.late{border-color:#e8c98d;background:#fdf8ec}
 .order-estimate p{margin:9px 0 0;color:#8a5a12;font-size:.82rem;line-height:1.5;font-weight:700}
+
+/* Urgent — moving one customer up the line, and what it costs the ones behind. */
+.plan-queue-row.rush .plan-queue-pos{background:#fff0e5;color:#a84e13}
+.plan-queue-act{grid-column:4;justify-self:end}
+.plan-queue-row{grid-template-columns:26px 1fr auto auto auto}
+.plan-queue-row .link-button{font-weight:800}
+.rush-chip{grid-column:1/-1;font-style:normal;background:#fff0e5;color:#a84e13;border-radius:999px;
+  padding:2px 8px;font-size:.68rem;font-weight:900;margin-left:7px}
+.rush-preview{grid-column:1/-1;border:1px solid #e8c98d;background:#fdf8ec;border-radius:10px;padding:12px 14px;margin:8px 0 4px}
+.rush-preview p{margin:0 0 8px;font-size:.85rem;line-height:1.55;color:#5a4715}
+.rush-gain b{font-size:.95rem}
+.rush-cost{font-weight:800}
+.rush-cost.good{color:#177044}
+.rush-list{list-style:none;margin:0 0 10px;padding:0}
+.rush-list li{font-size:.82rem;color:#5a4715;padding:3px 0;line-height:1.5}
+.rush-list li.calls{color:#b3261e}
+.rush-list em{font-style:normal;font-weight:800}
+.rush-calls{color:#b3261e;font-weight:800}
+.rush-preview label{display:block;font-size:.75rem;font-weight:800;color:#5a4715;margin-bottom:10px}
+.rush-preview input{display:block;width:100%;margin-top:4px;padding:9px 10px;border:1px solid #e0cfa4;border-radius:8px;background:#fff;font-size:.9rem}
+.rush-actions{display:flex;gap:9px;flex-wrap:wrap}
+.rush-actions button{flex:1 1 160px;padding:10px;border-radius:8px;font-weight:700}

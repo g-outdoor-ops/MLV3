@@ -14,7 +14,10 @@ export type OrderRecord={stageV2?:boolean;id:string;customerId:string;item:strin
   // The date the customer was actually given when the order was taken, worked out from the line as it
   // stood at that moment. Kept so what was promised can be compared with what happened, rather than
   // being recalculated later against a queue that has moved on.
-  promised?:string};
+  promised?:string;
+  // Jumped up the line for a customer in a bind. It carries who did it and why, because moving one
+  // order forward moves everybody behind it back, and in three months somebody will ask who decided.
+  rush?:{at:string;by:string;why?:string}};
 export type QcCheck={label:string;result:boolean|null};
 // `kind` says which station this run is on, and so what its good units eat: moulding pulls preforms,
 // assembly pulls caps. Without it an assembly run deducted PET preforms that had already been consumed
@@ -404,6 +407,60 @@ export function recordStep(st:ProdStep,actualQty:number,by:string,scrap?:number)
   const qty=Math.max(0,actualQty);
   return {...st,actualQty:qty,done:qty>=st.qty,scrap:scrap??st.scrap,
     doneAt:new Date().toISOString().slice(0,10),doneBy:by};
+}
+
+/**
+ * Whether an edit to a run needs confirming first — the same bargain guardStepEdit strikes for a step.
+ * Never blocks the edit, never lets one past in silence.
+ */
+export function guardRunEdit(prev:WorkOrder,next:Partial<WorkOrder>):string|null{
+  const running=prev.status==="Running";
+  if(!prev.good&&!prev.scrap&&!running)return null;
+  const made=`${prev.good} good and ${prev.scrap} scrap recorded`;
+  const preamble=`${prev.id} has ${made}${running?", and it is running now":""}.`;
+  if(next.quantity!=null&&next.quantity!==prev.quantity){
+    if(next.quantity<prev.good)return `${preamble} Lowering it to ${next.quantity} is below what has already been made. Keep the original, or edit and accept the ${prev.good} already produced?`;
+    return `${preamble} Change the quantity from ${prev.quantity} to ${next.quantity}?`;
+  }
+  if(next.item&&next.item!==prev.item)return `${preamble} Changing what it makes does not change what was already made. Continue?`;
+  if(next.line&&next.line!==prev.line)return `${preamble} Moving it to ${next.line} does not move what was already made. Continue?`;
+  return `${preamble} Edit it anyway?`;
+}
+
+/** What removing a run would mean, so the question can be asked properly before it is. */
+export function runDeleteImpact(data:AppData,id:string){
+  const run=(data.workOrders||[]).find(w=>w.id===id);
+  const steps=(data.prodDays||[]).flatMap(d=>d.steps||[]).filter(s=>s.workOrderId===id);
+  return {run,steps:steps.length,made:run?run.good:0,scrap:run?run.scrap:0,
+    started:!!run&&(run.good>0||run.scrap>0||run.status==="Running")};
+}
+
+/**
+ * Remove a run.
+ *
+ * The run goes; what it made does not. Its steps are handed back to the plan carrying the units they
+ * were credited with, by the same fill-in-date-order rule the run reported them under — because those
+ * bottles physically exist, and deleting the paperwork is not the same as unmaking them. A run that
+ * produced nothing simply releases its steps.
+ */
+export function deleteRun(data:AppData,id:string):AppData{
+  const run=(data.workOrders||[]).find(w=>w.id===id);
+  if(!run)return data;
+  const covered=(data.prodDays||[]).flatMap(d=>d.steps||[]).filter(s=>s.workOrderId===id)
+    .sort((a,b)=>(a.id>b.id?1:-1));
+  const kept=new Map<string,number>();
+  let left=run.good;
+  for(const st of covered){const take=Math.min(st.qty,Math.max(0,left));kept.set(st.id,take);left-=take}
+  return {...data,
+    workOrders:(data.workOrders||[]).filter(w=>w.id!==id),
+    prodDays:(data.prodDays||[]).map(d=>({...d,steps:(d.steps||[]).map(st=>{
+      if(st.workOrderId!==id)return st;
+      const made=kept.get(st.id)||0;
+      const freed={...st,workOrderId:undefined};
+      if(!made)return freed;
+      return {...freed,actualQty:made,done:made>=st.qty,doneAt:st.doneAt||run.date,
+        note:[st.note,`${made} made on ${run.id} before it was removed`].filter(Boolean).join(" · ")};
+    })}))};
 }
 
 /** Owner reconciling the record: the floor made units and never recorded them. */
@@ -804,10 +861,20 @@ export type QueueEntry={
   scheduled:boolean;                   // already on the calendar as real steps
 };
 
-/** Orders still to be made, oldest first. An order's place in line is when it was taken. */
+/**
+ * Orders still to be made, in the order they will be worked.
+ *
+ * Normally that is the order they were taken in. An urgent order goes in front of everything that has
+ * not been marked urgent — and urgent orders keep their own order among themselves, by when they were
+ * marked, so a second emergency does not quietly overtake the first one.
+ */
 export const queueOrders=(data:AppData)=>(data.orders||[])
   .filter(o=>o.status!=="Needs approval"&&stageOf(o)<STAGE_READY)
-  .sort((a,b)=>String(a.createdAt||a.id).localeCompare(String(b.createdAt||b.id)));
+  .sort((a,b)=>{
+    if(!!a.rush!==!!b.rush)return a.rush?-1:1;
+    const key=(o:OrderRecord)=>String(o.rush?o.rush.at:(o.createdAt||o.id));
+    return key(a).localeCompare(key(b));
+  });
 
 /**
  * The whole line, each order dated behind the ones ahead of it. Orders already on the calendar keep
@@ -852,6 +919,39 @@ export function loadAheadOf(data:AppData,orderId:string,from?:string):DayLoadMap
     planOrder(o,data,from,load);
   }
   return load;
+}
+
+/**
+ * What moving an order to the front would actually cost.
+ *
+ * Somebody is always behind. This runs the line as it stands and as it would be, and reports both ends:
+ * what the urgent customer gains, and every order that goes backwards — flagging the ones that would
+ * then miss a date they have already been given, because those are phone calls somebody has to make.
+ *
+ * Work already on the calendar keeps its slot. A flag must not shuffle a run the floor may have started;
+ * to take a shift off scheduled work the owner moves those steps by hand, and the guard has its say.
+ */
+export type RushMove={order:OrderRecord;from:string;to:string;days:number;missesPromise:boolean};
+export function rushImpact(data:AppData,orderId:string,from?:string){
+  const now=new Date().toISOString();
+  const before=productionQueue(data,from);
+  const after=productionQueue({...data,orders:(data.orders||[]).map(o=>
+    o.id===orderId?{...o,rush:{at:now,by:""}}:o)},from);
+  const was=new Map(before.map(q=>[q.order.id,q]));
+  const moved:RushMove[]=[];
+  let gain=0;
+  for(const q of after){
+    const prev=was.get(q.order.id);
+    if(!prev||prev.finish===q.finish)continue;
+    const days=Math.round((new Date(q.finish+"T12:00:00Z").getTime()-new Date(prev.finish+"T12:00:00Z").getTime())/864e5);
+    if(q.order.id===orderId){gain=-days;continue}
+    if(days>0)moved.push({order:q.order,from:prev.finish,to:q.finish,days,
+      missesPromise:!!q.order.promised&&q.finish>q.order.promised});
+  }
+  const target=after.find(q=>q.order.id===orderId);
+  return {gain,finish:target?.finish||"",position:target?.position||0,
+    was:was.get(orderId)?.finish||"",moved,
+    calls:moved.filter(m=>m.missesPromise)};
 }
 
 /**

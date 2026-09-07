@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { DEFAULT_QC, DEFAULT_SHIP, STAGES, STAGE_NEW, STAGE_INVOICED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, canStartProduction, documentBalance, documentTotal, dueDays, dueIso, fmtDay, orderTotals, stageOf, todayIso, type Customer, type DocumentRecord, type WorkOrder, fmtDue} from "../app-data";
+import { DEFAULT_QC, DEFAULT_SHIP, STAGES, STAGE_NEW, STAGE_INVOICED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, ASSEMBLY_LINE, canStartProduction, deleteRun, documentBalance, documentTotal, dueDays, dueIso, fmtDay, guardRunEdit, orderTotals, runDeleteImpact, stageOf, todayIso, type Customer, type DocumentRecord, type WorkOrder, fmtDue} from "../app-data";
 import { DetailField, ProfileSection, nextId, now, num, uid, useApp, usd2, type Role } from "./store";
 import { qboCall } from "./auth";
 
@@ -10,6 +10,9 @@ export function RecordDrawer({id,close}:{id:string;close:()=>void}){
   const [payAmount,setPayAmount]=useState(0);
   const [payMethod,setPayMethod]=useState("check");
   const [paying,setPaying]=useState(false);
+  const [runEdit,setRunEdit]=useState(false);
+  const [runDel,setRunDel]=useState(false);
+  const [runAsk,setRunAsk]=useState<{message:string;confirm:()=>void}|null>(null);
   const doc=data.documents.find(x=>x.id===id);const order=data.orders.find(x=>x.id===id);const work=data.workOrders.find(x=>x.id===id);const po=(data.purchaseOrders||[]).find(x=>x.id===id);
   const customer=data.customers.find(x=>x.id===(doc?.customerId||order?.customerId||data.orders.find(o=>o.id===work?.orderId)?.customerId));
   const owner=role==="owner";
@@ -192,6 +195,10 @@ export function RecordDrawer({id,close}:{id:string;close:()=>void}){
   }
   // ---------------- WORK ORDER ----------------
   else if(work){
+    const delImpact=runDeleteImpact(data,work.id);
+    // The tablet shows a tab for any station with work on it, so the editor offers the same list.
+    const runLines=Array.from(new Set([...(data.settings.lines||["Line 1"]),ASSEMBLY_LINE,
+      ...data.workOrders.filter(w=>w.status!=="Done").map(w=>w.line||"Line 1")]));
     const so=data.orders.find(o=>o.id===work.orderId);const rate=data.itemRates.find(r=>r.item===work.item);const checks=work.qc||(rate?.qcChecks||DEFAULT_QC).map(l=>({label:l,result:null as boolean|null}));const done=checks.filter(c=>c.result!==null).length;const fails=checks.filter(c=>c.result===false).length;
     eyebrow="Work order";heading=`${work.id} · ${work.item}`;status=work.status;
     const upd=(patch:Partial<WorkOrder>,action:string,msg:string,extra?:(v:typeof data)=>Partial<typeof data>)=>act(v=>({...v,workOrders:v.workOrders.map(x=>x.id===work.id?{...x,...patch}:x),...(extra?extra(v):{})}),action,`${work.id} ${action}`,msg,"Work orders");
@@ -204,10 +211,37 @@ export function RecordDrawer({id,close}:{id:string;close:()=>void}){
       <DetailField label="Material" value={rate?.material?`${rate.material} × ~${num(Math.round(work.quantity*1.03))}`:"—"}/>
       {so?.notes&&<DetailField label="Note from sales" value={so.notes}/>}
       {work.qcNote&&<DetailField label="Floor notes" value={work.qcNote}/>}
-      {owner&&<div className="form-grid" style={{marginTop:8}}><label>Line<select value={work.line} onChange={e=>upd({line:e.target.value},"wo.line",`${work.id} moved to ${e.target.value}`)}>{(data.settings.lines||["Line 1"]).map(l=><option key={l}>{l}</option>)}</select></label><label>Start date<input type="date" value={work.date} onChange={e=>upd({date:e.target.value,status:work.status==="Needs scheduling"?"Scheduled":work.status},"wo.move",`${work.id} rescheduled`)}/></label><label>Quantity<input type="number" value={work.quantity} onChange={e=>upd({quantity:Math.max(1,Number(e.target.value)||1)},"wo.qty",`${work.id} quantity`)}/></label></div>}
+      {/* One form and one save, rather than a commit on every keystroke — and every change asks the
+          guard first, because a run that has already made something is a record, not a draft. */}
+      {owner&&runEdit&&<RunEditor work={work} lines={runLines} items={data.itemRates.filter(r=>r.kind!=="raw").map(r=>r.item)}
+        onCancel={()=>setRunEdit(false)}
+        onSave={next=>{
+          const message=guardRunEdit(work,next);
+          const apply=()=>{upd(next,"wo.edit",`${work.id} updated`);setRunEdit(false);setRunAsk(null)};
+          if(message)setRunAsk({message,confirm:apply});else apply();
+        }}/>}
+      {runAsk&&<div className="plan-guard" role="alertdialog" aria-label="Confirm this change">
+        <p>{runAsk.message}</p>
+        <div className="plan-guard-actions">
+          <button className="secondary" onClick={()=>setRunAsk(null)}>Keep it as it is</button>
+          <button className="primary" onClick={()=>runAsk.confirm()}>Make the change anyway</button>
+        </div>
+      </div>}
+      {owner&&runDel&&<div className="plan-guard" role="alertdialog" aria-label="Confirm removing this run">
+        <p>Remove {work.id}?{delImpact.started
+          ? ` It has ${num(delImpact.made)} good and ${num(delImpact.scrap)} scrap recorded. Those bottles were made, so the ${delImpact.steps?"days it covers keep":"record keeps"} what it produced — the run itself goes.`
+          : " Nothing has been recorded against it."}
+          {delImpact.steps>0&&` ${delImpact.steps} day${delImpact.steps===1?"":"s"} on the plan go back to being planned work.`}</p>
+        <div className="plan-guard-actions">
+          <button className="secondary" onClick={()=>setRunDel(false)}>Keep it</button>
+          <button className="primary" onClick={()=>{const id=work.id;act(v=>deleteRun(v,id),"wo.delete",`${id} removed`,`${id} removed from the schedule`,"Production calendar");setRunDel(false);close()}}>Remove {work.id}</button>
+        </div>
+      </div>}
       {(work.status==="QC hold"||work.status==="Running"||work.qc)&&work.status!=="Done"&&<section className="qc-checks"><h3>Quality checks · {done} of {checks.length}</h3>{checks.map((c,i)=><div key={c.label} className="qc-check"><span>{c.label}</span><span><button className={c.result===true?"pass on":"pass"} onClick={()=>setCheck(i,true)} disabled={!owner&&role!=="floor"}>✓</button><button className={c.result===false?"fail on":"fail"} onClick={()=>setCheck(i,false)} disabled={!owner&&role!=="floor"}>✗</button></span></div>)}<label>Notes<textarea value={work.qcNote||""} onChange={e=>commit(v=>({...v,workOrders:v.workOrders.map(x=>x.id===work.id?{...x,qcNote:e.target.value}:x)}),"qc.note",`${work.id} note`)}/></label></section>}
     </>;
     footer=<><button className="secondary" onClick={close}>Close</button>
+      {owner&&<button className="secondary" onClick={()=>{setRunEdit(v=>!v);setRunDel(false)}}>{runEdit?"Cancel edit":"Edit run"}</button>}
+      {owner&&<button className="secondary" onClick={()=>{setRunDel(v=>!v);setRunEdit(false)}}>{runDel?"Keep it":"Delete run"}</button>}
       {owner&&work.status==="Needs scheduling"&&<button className="primary" onClick={()=>upd({status:"Scheduled",date:work.date||todayIso()},"wo.schedule",`${work.id} scheduled on ${work.line}`)}>Schedule</button>}
       {owner&&work.status==="Scheduled"&&<button className="primary" onClick={()=>upd({status:"Released"},"wo.release",`${work.id} released to the ${work.line} tablet`)}>Release to floor</button>}
       {(owner||role==="floor")&&(work.status==="Released"||work.status==="Paused")&&<button className="primary" onClick={()=>upd({status:"Running"},"wo.start",`${work.id} running`,v=>({workOrders:v.workOrders.map(x=>x.id===work.id?{...x,status:"Running"}:x.status==="Running"&&x.line===work.line?{...x,status:"Paused"}:x),orders:v.orders.map(o=>o.id===work.orderId&&stageOf(o)>=STAGE_PAID&&stageOf(o)<STAGE_PRODUCTION?{...o,stage:STAGE_PRODUCTION,stageV2:true,status:STAGES[STAGE_PRODUCTION]}:o)}))}>Start run</button>}
@@ -229,6 +263,42 @@ export function RecordDrawer({id,close}:{id:string;close:()=>void}){
 }
 
 // ---------------- CUSTOMER PROFILE (Chris's V3, live buttons) ----------------
+/** Editing a run: what it makes, how many, which station, and when it starts. One save. */
+function RunEditor({work,lines,items,onSave,onCancel}:{work:WorkOrder;lines:string[];items:string[];onSave:(next:Partial<WorkOrder>)=>void;onCancel:()=>void}){
+  const [item,setItem]=useState(work.item);
+  const [quantity,setQuantity]=useState(String(work.quantity));
+  const [line,setLine]=useState(work.line||lines[0]);
+  const [date,setDate]=useState(work.date);
+  const [days,setDays]=useState(String(work.days||1));
+  const [purpose,setPurpose]=useState(work.purpose||"");
+  const save=()=>{
+    const next:Partial<WorkOrder>={};
+    const q=Math.max(1,Number(quantity)||1);const dd=Math.max(1,Number(days)||1);
+    if(item!==work.item)next.item=item;
+    if(q!==work.quantity)next.quantity=q;
+    if(line!==work.line)next.line=line;
+    if(date!==work.date)next.date=date;
+    if(dd!==(work.days||1))next.days=dd;
+    if(purpose!==(work.purpose||""))next.purpose=purpose;
+    // Moving an unscheduled run onto a date is what schedules it.
+    if(next.date&&work.status==="Needs scheduling")next.status="Scheduled";
+    if(!Object.keys(next).length){onCancel();return}
+    onSave(next);
+  };
+  return <div className="plan-form" style={{marginTop:10}}>
+    <label>Makes<select value={item} onChange={e=>setItem(e.target.value)}>{[...new Set([work.item,...items])].map(x=><option key={x}>{x}</option>)}</select></label>
+    <label>Quantity<input inputMode="numeric" value={quantity} onChange={e=>setQuantity(e.target.value)}/></label>
+    <label>Station<select value={line} onChange={e=>setLine(e.target.value)}>{[...new Set([line,...lines])].map(l=><option key={l}>{l}</option>)}</select></label>
+    <label>Starts<input type="date" value={date} onChange={e=>setDate(e.target.value||work.date)}/></label>
+    <label>Days<input inputMode="numeric" value={days} onChange={e=>setDays(e.target.value)}/></label>
+    <label>Purpose<input value={purpose} onChange={e=>setPurpose(e.target.value)}/></label>
+    <div className="plan-form-actions">
+      <button className="secondary" onClick={onCancel}>Cancel</button>
+      <button className="primary" onClick={save}>Save run</button>
+    </div>
+  </div>;
+}
+
 export function CustomerProfileDrawer({customer,close}:{customer:Customer;close:()=>void}){const{data,commit,setModal,openRecord,notify}=useApp();const[tab,setTab]=useState("Profile");const[editing,setEditing]=useState(false);const[form,setForm]=useState(customer);const reps=Array.from(new Set([customer.rep,...data.customers.map(c=>c.rep)])).filter(Boolean);const ordersFor=data.orders.filter(x=>x.customerId===customer.id);const docs=data.documents.filter(x=>x.customerId===customer.id);const activity=data.activities.filter(x=>x.customerId===customer.id);const save=()=>{commit(v=>({...v,customers:v.customers.map(x=>x.id===customer.id?form:x),activities:[{id:uid("a"),customerId:customer.id,title:"Profile updated",detail:"Contact and delivery information saved",actor:"Current user",createdAt:now()},...v.activities]}),"crm.update",`${customer.name} updated`);setEditing(false);notify(`Customer profile saved — ${form.name}`,"Customers")};
   const setPrice=(item:string,val:string)=>{const p={...(form.prices||{})};const n=parseFloat(val);if(isNaN(n)||n<=0)delete p[item];else p[item]=n;setForm({...form,prices:p})};
   return <div className="detail-layer" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><aside className="detail-drawer crm-profile-drawer"><header><div><p className="eyebrow">Customer CRM profile</p><h2>{customer.name}</h2><span className="customer-number">{customer.kind==="lead"?`Lead · ${customer.stage}`:`Customer · ${customer.stage}`} · Sales owner: {customer.rep}</span></div><button onClick={close}>×</button></header><div className="crm-tabs">{["Profile","Orders","Invoices","Activity"].map(x=><button key={x} className={tab===x?"active":""} onClick={()=>{setTab(x);setEditing(false)}}>{x}</button>)}</div><div className="detail-body">{tab==="Profile"&&(editing?<div className="form-grid"><label>Company<input value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></label><label>Sales rep<select value={form.rep} onChange={e=>setForm({...form,rep:e.target.value})}>{reps.map(r=><option key={r}>{r}</option>)}<option>Unassigned</option></select></label><label>Contact<input value={form.contact} onChange={e=>setForm({...form,contact:e.target.value})}/></label><label>Email<input value={form.email} onChange={e=>setForm({...form,email:e.target.value})}/></label><label>Phone<input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})}/></label><label>Terms<select value={form.terms} onChange={e=>setForm({...form,terms:e.target.value})}><option>Net 30</option><option>Net 15</option><option>Due on receipt</option><option>Card on pickup</option><option>Prepaid</option></select></label><label>Billing address<input value={form.billing} onChange={e=>setForm({...form,billing:e.target.value})}/></label><label>Delivery address<input value={form.delivery} onChange={e=>setForm({...form,delivery:e.target.value})}/></label>{data.itemRates.filter(r=>r.kind!=="raw").map(r=><label key={r.id}>Their price · {r.item} <small>list {usd2(r.rate)}</small><input type="number" step="0.05" placeholder="list" value={form.prices?.[r.item]??""} onChange={e=>setPrice(r.item,e.target.value)}/></label>)}<label className="full-field">Internal notes<textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})}/></label></div>:<><div className="crm-profile-summary"><div><span>Open balance</span><strong className={customer.balance?"danger":""}>{usd2(customer.balance)}</strong></div><div><span>Open orders</span><strong>{ordersFor.filter(x=>stageOf(x)<STAGE_DONE).length}</strong></div><div><span>Lifetime sales</span><strong>{usd2(customer.lifetimeSales)}</strong></div></div><ProfileSection title="Primary contact" rows={[["Name",customer.contact||"Not entered"],["Email",customer.email||"Not entered"],["Phone",customer.phone||"Not entered"]]}/><ProfileSection title="Addresses & delivery" rows={[["Billing",customer.billing||"Not entered"],["Delivery",customer.delivery||"Not entered"],["Terms",customer.terms],["QuickBooks",customer.qb?"Linked":"Not linked yet"]]}/><ProfileSection title="Agreed prices" rows={Object.keys(customer.prices||{}).length?Object.entries(customer.prices||{}).map(([k,v])=>[k,usd2(v)]):[["Prices","List prices apply"]]}/><ProfileSection title="Internal notes" rows={[["Notes",customer.notes||"No notes yet"]]}/></>)}{tab==="Orders"&&<section className="client-tab"><h3>Orders for this customer</h3>{ordersFor.length?ordersFor.map(x=><button className="client-record" key={x.id} onClick={()=>openRecord(x.id)}><span><b>{x.id}</b><small>{num(x.quantity)} bottles · {x.item}</small></span><span><b>{x.status}</b><small>{fmtDue(x.due)}</small></span><em>Open →</em></button>):<p>No orders yet.</p>}</section>}{tab==="Invoices"&&<section className="client-tab"><h3>Quotes and invoices</h3>{docs.length?docs.map(x=><button className="client-record" key={x.id} onClick={()=>openRecord(x.id)}><span><b>{x.id} · {usd2(documentTotal(x))}</b><small>{x.item}</small></span><span><b>{x.status}</b><small>{x.kind}</small></span><em>Open →</em></button>):<p>No documents yet.</p>}</section>}{tab==="Activity"&&<section className="client-tab activity-timeline">{activity.length?activity.map(x=><article key={x.id}><i/><div><small>{x.createdAt}</small><b>{x.title}</b><p>{x.detail}</p><em>By {x.actor}</em></div></article>):<p>No activity yet.</p>}</section>}</div><footer><button className="secondary" onClick={close}>Close</button>{tab==="Profile"&&<button className="primary" onClick={()=>editing?save():setEditing(true)}>{editing?"Save profile":"Edit profile"}</button>}{tab==="Orders"&&<button className="primary" onClick={()=>{close();setModal("order",customer.id)}}>+ New order</button>}{tab==="Invoices"&&<><button className="secondary" onClick={()=>{close();setModal("quote",customer.id)}}>+ Quote</button><button className="primary" onClick={()=>{close();setModal("invoice",customer.id)}}>+ Invoice</button></>}{tab==="Activity"&&<button className="primary" onClick={()=>{const note=prompt("Add a note for this customer");if(note)commit(v=>({...v,activities:[{id:uid("a"),customerId:customer.id,title:"Customer note",detail:note,actor:"Current user",createdAt:now()},...v.activities]}),"activity.create",note)}}>+ Add note</button>}</footer></aside></div>}

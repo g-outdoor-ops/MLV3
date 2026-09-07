@@ -12,7 +12,7 @@
 //  · Nothing the floor has already made may be edited away silently. Every edit runs guardStepEdit
 //    first and, when it has something to say, the person has to answer it before the change lands.
 import { useState } from "react";
-import { DEFAULT_BLANKS, DEFAULT_MACHINES, DEFAULT_SKUS, STAGE_SHIPPED, addSteps, dayLoad, dueIso, fmtDue, stageOf, guardStepEdit, orderNeeds, ordersToPlan, planOrder, loadAheadOf, planTotals, productionQueue, reconcileStep, recordStep, runFromSteps, runSteps, stepProgress, stepTargetName, todayIso,
+import { DEFAULT_BLANKS, DEFAULT_MACHINES, DEFAULT_SKUS, STAGE_SHIPPED, addSteps, dayLoad, dueIso, fmtDue, stageOf, guardStepEdit, orderNeeds, ordersToPlan, planOrder, loadAheadOf, planTotals, productionQueue, reconcileStep, rushImpact, recordStep, runFromSteps, runSteps, stepProgress, stepTargetName, todayIso,
   type AppData, type Blank, type Machine, type MachineLoad, type OrderRecord, type ProdDay, type ProdSource, type ProdStep, type WorkOrder } from "../app-data";
 import { Kpi, nextId, num, uid, useApp } from "./store";
 
@@ -298,9 +298,23 @@ export function ProductionCalendarView(){
  * can actually do.
  */
 function TheLine({data,onOpen}:{data:AppData;onOpen:(id:string)=>void}){
+  const {commit,notify,role,user}=useApp();
+  const owner=role==="owner";
+  const [rushing,setRushing]=useState<string|null>(null);
+  const [why,setWhy]=useState("");
   const queue=productionQueue(data);
   if(!queue.length)return null;
   const slipping=queue.filter(q=>q.daysLate);
+
+  const setRush=(o:OrderRecord,rush:boolean)=>{
+    commit(v=>({...v,orders:v.orders.map(x=>x.id===o.id
+      ?(rush?{...x,rush:{at:new Date().toISOString(),by:user||"Owner",...(why.trim()?{why:why.trim()}:{})}}
+            :{...x,rush:undefined})
+      :x)}),rush?"order.rush":"order.rush.clear",`${o.id} ${rush?"moved to the front":"back in line"}`);
+    setRushing(null);setWhy("");
+    notify(rush?`${o.id} is urgent — it goes to the front of the line`:`${o.id} is back in its place in line`,PRODUCTION_CALENDAR);
+  };
+
   return <section className="plan-queue">
     <div className="plan-queue-head">
       <h2>The line · {queue.length} order{queue.length===1?"":"s"} to make</h2>
@@ -309,17 +323,60 @@ function TheLine({data,onOpen}:{data:AppData;onOpen:(id:string)=>void}){
     <div className="plan-queue-rows">
       {queue.map(q=>{
         const customer=data.customers.find(c=>c.id===q.order.customerId);
-        return <button key={q.order.id} className={`plan-queue-row${q.daysLate?" late":""}`} onClick={()=>onOpen(q.order.id)}>
+        return <div key={q.order.id} className={`plan-queue-row${q.daysLate?" late":""}${q.order.rush?" rush":""}`}>
           <span className="plan-queue-pos">{q.position}</span>
-          <span className="plan-queue-who"><b>{q.order.id} · {customer?.name||"Customer"}</b>
-            <small>{num(q.order.quantity)} bottles · {q.toMake?`${num(q.toMake)} to make`:"from stock"}{q.scheduled?" · on the calendar":""}</small></span>
+          <span className="plan-queue-who">
+            <b><button className="link-button" onClick={()=>onOpen(q.order.id)}>{q.order.id}</button> · {customer?.name||"Customer"}
+              {q.order.rush&&<i className="rush-chip">Urgent</i>}</b>
+            <small>{num(q.order.quantity)} bottles · {q.toMake?`${num(q.toMake)} to make`:"from stock"}{q.scheduled?" · on the calendar":""}
+              {q.order.rush?.why?` · ${q.order.rush.why}`:""}{q.order.rush?.by?` · moved up by ${q.order.rush.by}`:""}</small></span>
           <span className="plan-queue-when"><b>{fmtDue(q.finish)}</b>
             <small>{q.order.promised&&q.order.promised!==q.finish?`promised ${fmtDue(q.order.promised)}`:`needed ${fmtDue(q.order.due)}`}</small></span>
           <em>{q.daysLate?`${q.daysLate}d late`:"on time"}</em>
-        </button>;
+          {owner&&<span className="plan-queue-act">
+            {q.order.rush
+              ?<button className="link-button" onClick={()=>setRush(q.order,false)}>Back in line</button>
+              :<button className="link-button" onClick={()=>{setRushing(rushing===q.order.id?null:q.order.id);setWhy("")}}>{rushing===q.order.id?"Cancel":"Make urgent"}</button>}
+          </span>}
+          {rushing===q.order.id&&<RushPreview data={data} order={q.order} why={why} setWhy={setWhy}
+            onCancel={()=>setRushing(null)} onConfirm={()=>setRush(q.order,true)}/>}
+        </div>;
       })}
     </div>
   </section>;
+}
+
+/**
+ * What moving this order to the front actually costs, before it is done.
+ *
+ * Somebody is always behind. The orders that go backwards are named, and the ones that would then miss
+ * a date their customer has already been given are called out as phone calls — because the point of
+ * doing this in the app rather than in someone's head is that the cost is visible when the decision is
+ * made, not discovered a fortnight later.
+ */
+function RushPreview({data,order,why,setWhy,onCancel,onConfirm}:{data:AppData;order:OrderRecord;why:string;setWhy:(v:string)=>void;onCancel:()=>void;onConfirm:()=>void}){
+  const impact=rushImpact(data,order.id);
+  return <div className="rush-preview">
+    <p className="rush-gain">
+      {impact.gain>0
+        ?<>Moving {order.id} to the front finishes it <b>{fmtDue(impact.finish)}</b> — {impact.gain} day{impact.gain===1?"":"s"} sooner.</>
+        :<>Moving {order.id} to the front does not bring it forward: what is ahead of it is already on the calendar and keeps its slot.</>}
+    </p>
+    {impact.moved.length
+      ?<><p className="rush-cost">{impact.moved.length} order{impact.moved.length===1?"":"s"} go{impact.moved.length===1?"es":""} back:</p>
+        <ul className="rush-list">{impact.moved.map(m=><li key={m.order.id} className={m.missesPromise?"calls":""}>
+          <b>{m.order.id}</b> · {data.customers.find(c=>c.id===m.order.customerId)?.name} — {fmtDue(m.from)} → {fmtDue(m.to)} ({m.days} day{m.days===1?"":"s"} later)
+          {m.missesPromise&&<em> · now misses the {fmtDue(m.order.promised)} they were promised</em>}
+        </li>)}</ul>
+        {impact.calls.length>0&&<p className="rush-calls">{impact.calls.length} customer{impact.calls.length===1?"":"s"} will need a call: {impact.calls.map(c=>data.customers.find(x=>x.id===c.order.customerId)?.name).join(", ")}.</p>}
+      </>
+      :<p className="rush-cost good">Nothing else moves — there is room in front of it.</p>}
+    <label>Why (kept on the order)<input value={why} onChange={e=>setWhy(e.target.value)} placeholder="e.g. their line is down, they collect Friday"/></label>
+    <div className="rush-actions">
+      <button className="secondary" onClick={onCancel}>Leave it where it is</button>
+      <button className="primary" onClick={onConfirm}>Move it to the front</button>
+    </div>
+  </div>;
 }
 
 /**

@@ -17,8 +17,9 @@ to invoicing or payments as touching real money.
 
 ## The state of play
 
-`main` is deployed and pushed through **`9d0fa57`** — Phases 1-5. Phase 6 is in the tree, uncommitted:
-assembly runs, and the production queue that dates an order when it is taken.
+`main` is deployed and pushed through **`9d0fa57`** — Phases 1-5. Committed and **not pushed**:
+`577510f` (Phase 6 — assembly runs and the production queue) and Phase 7 in the tree — urgent orders,
+and editing or deleting a run.
 
 The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
 The production rebuild is `4b2ed00` (Phase 1, model), `8c0bf42` (Phase 2, the calendar) and Phase 3 in
@@ -272,7 +273,7 @@ started has to answer `guardStepEdit` first. There are two write paths for a ste
 Sales gets the same screen read-only (it keys off `role`, as before). `calendar.move` moved from
 `sales.tsx` to `prodplan.tsx`, so `tests/rendered-html.test.mjs` reads that file too now.
 
-### Phase 6 — assembly runs, and the line (in the tree, uncommitted)
+### Phase 6 — assembly runs, and the line (`577510f`)
 
 **Assembly is a run now.** "Send to the floor" works on an assembly step as well as a moulding one, and
 the work order it raises is marked `kind:"assembly"` and lands on an **Assembly** station rather than a
@@ -310,13 +311,44 @@ orders for anything short of stock, which was a third mechanism putting work on 
 of capacity. An order joins the queue instead, gets a real date, and becomes steps on the calendar when
 the money lands.
 
+### Phase 7 — urgent orders, and editing a run (in the tree, uncommitted)
+
+**Urgent.** An order can be moved to the front of the line for a customer in a bind. `order.rush` carries
+who did it, when, and why — because moving one order forward moves everybody behind it back, and in
+three months somebody will ask who decided.
+
+The point of doing it in the app rather than in someone's head is that **the cost is shown before the
+decision**. `rushImpact()` runs the line as it stands and as it would be, and the preview names what the
+urgent customer gains, every order that goes backwards and by how much, and — separately — the ones that
+would then miss a date they have already been given, because those are phone calls somebody has to make.
+Nothing is written until the owner confirms.
+
+Two rules worth keeping: urgent orders keep their own order among themselves (a second emergency does
+not overtake the first), and **work already on the calendar keeps its slot** — a flag must not shuffle a
+run the floor may have started. To take a shift off scheduled work the owner moves those steps by hand,
+and the guard has its say. Clearing the flag puts the order back where it was taken.
+
+**Editing and deleting a run.** The work-order drawer had three fields that committed on every keystroke
+and no way to remove a run at all. It now has one editor — makes, quantity, station, start, days,
+purpose — with a single save, and every change goes through `guardRunEdit`, which asks before touching a
+run that has produced something or is running (and calls out cutting the quantity below what was made).
+That also closes review item 9 for this screen.
+
+`deleteRun()` removes the run but **not what it made**: its days go back to the plan carrying the units
+they were credited with, by the same fill-in-date-order rule the run reported them under, with a note
+saying where they came from. Those bottles physically exist; deleting the paperwork is not the same as
+unmaking them. A run that produced nothing simply releases its days. The confirmation says which of the
+two is about to happen.
+
 ### Still open
 
 - **Palletizing and shipping steps have no run**, so they keep their own record. Correct today — no work
   order models them — but "who recorded this" still comes from two places depending on the step type.
-- **The queue is strictly the order taken.** Nothing lets the owner pull an urgent job forward, and
-  doing so by hand (moving steps) does not renumber the line. If a customer has to be jumped, the app
-  has no opinion about it yet.
+- **Only the owner can mark an order urgent.** A rep on the phone has to ask, which is probably right —
+  it re-promises other customers — but it has not been agreed.
+- **A rush does not re-promise anybody automatically.** The line shows who now misses their date; nobody
+  is emailed and no `promised` date is rewritten. That is deliberate, and it means the calls are a
+  manual job somebody has to actually do.
 - **`estimateOrder` re-plans the whole queue on every keystroke** in the order modal. Fine at this size;
   it would want memoising long before the order book reaches a few hundred.
 - The month cell caps at three chips. On a heavy day that hides real work behind "+2 more"; the day card
@@ -383,7 +415,7 @@ on Render before the tablet is handed over.
 
 - **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
   `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
-  Run with `node tests/<name>.test.mjs`. 272 assertions.
+  Run with `node tests/<name>.test.mjs`. 304 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.

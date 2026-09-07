@@ -389,11 +389,85 @@ if(first&&last&&first.id!==last.id)
   t("an order behind another is not given the shifts in front of it",
     Object.keys(loadAheadOf(d,last.id,"2026-09-07")).length>=Object.keys(loadAheadOf(d,first.id,"2026-09-07")).length);
 
+console.log("\nUrgent — moving a customer up the line:");
+const {rushImpact,queueOrders:qo}=app;
+// A shop with an empty shelf and two big orders, so a rush has something to displace.
+const busy=normalize({...d,
+  inventory:d.inventory.map(i=>i.item==="5-Gallon Bottle · 2 caps"?{...i,onHand:0,committed:0}:i),
+  orders:[...d.orders,
+    {...d.orders[0],id:"SO-AHEAD",customerId:"c3",quantity:4000,due:"2026-10-30",status:"Paid",payment:"Paid",stage:3,stageV2:true,createdAt:"2026-09-06T09:00:00Z",promised:"2026-10-01",invoiceId:undefined,lines:[{item:"5-Gallon Bottle · 2 caps",quantity:4000,rate:9.4}]},
+    {...d.orders[0],id:"SO-BIND",customerId:"c2",quantity:3000,due:"2026-09-11",status:"Paid",payment:"Paid",stage:3,stageV2:true,createdAt:"2026-09-07T12:00:00Z",invoiceId:undefined,lines:[{item:"5-Gallon Bottle · 2 caps",quantity:3000,rate:9.4}]}]});
+const im=rushImpact(busy,"SO-BIND","2026-09-07");
+t("the urgent order comes forward",im.gain>0,`${im.gain} days`);
+t("it goes to the front of the line",im.position===1);
+t("what it costs is named, not hidden",im.moved.some(m=>m.order.id==="SO-AHEAD"));
+t("including how far back that order goes",im.moved.find(m=>m.order.id==="SO-AHEAD").days>0);
+// The reason to do this in the app: the promise that just broke is a phone call somebody has to make.
+t("an order that now misses a promise is flagged as a call",im.calls.some(c=>c.order.id==="SO-AHEAD"));
+t("the preview changes nothing by itself",!busy.orders.find(o=>o.id==="SO-BIND").rush);
+
+const rushed=normalize({...busy,orders:busy.orders.map(o=>o.id==="SO-BIND"?{...o,rush:{at:"2026-09-07T12:00:00Z",by:"Chris",why:"their line is down"}}:o)});
+const after=productionQueue(rushed,"2026-09-07");
+t("once marked, it is first in the line",after[0].order.id==="SO-BIND");
+t("and it finishes when the preview said it would",after[0].finish===im.finish,`${after[0].finish} vs ${im.finish}`);
+t("the order it jumped is right behind it",after[1].order.id==="SO-AHEAD");
+t("why it was moved is kept on the order",rushed.orders.find(o=>o.id==="SO-BIND").rush.why==="their line is down");
+t("and who moved it",rushed.orders.find(o=>o.id==="SO-BIND").rush.by==="Chris");
+// Two emergencies in a week: the first one asked for keeps its place ahead of the second.
+const both=normalize({...rushed,orders:rushed.orders.map(o=>o.id==="SO-AHEAD"?{...o,rush:{at:"2026-09-08T09:00:00Z",by:"Chris"}}:o)});
+t("a second urgent order does not overtake the first",qo(both)[0].id==="SO-BIND"&&qo(both)[1].id==="SO-AHEAD");
+t("but both are ahead of everything else",qo(both).slice(0,2).every(o=>o.rush));
+// Clearing the flag puts it back where it was taken.
+const cleared=normalize({...rushed,orders:rushed.orders.map(o=>o.id==="SO-BIND"?{...o,rush:undefined}:o)});
+t("taking urgent off puts it back in its place",productionQueue(cleared,"2026-09-07")[0].order.id!=="SO-BIND");
+
 console.log("\nTaking an order no longer raises work orders behind the plan's back:");
 const modal=readFileSync(new URL("../app/components/modals.tsx",import.meta.url),"utf8");
 t("the order modal quotes from the line",modal.includes("estimateOrder("));
 t("it stores what the customer was told",modal.includes("promised:estimate.finish"));
 t("and it raises no work orders of its own",/const newWOs:WorkOrder\[\]=\[\];/.test(modal));
+}
+
+// ---------------------------------------------------------------------------
+// Editing and removing a run.
+if(app){
+const {normalize,demoData,guardRunEdit,deleteRun,runDeleteImpact,stepProgress}=app;
+const d=normalize(demoData);
+const run=d.workOrders.find(w=>w.id==="WO-121");     // covers two planned days, 620 made, 14 scrap
+
+console.log("\nEditing a run that has already made something asks first:");
+const fresh={id:"WO-X",item:"x",quantity:500,good:0,scrap:0,packed:0,date:"",status:"Scheduled",purpose:""};
+t("an untouched run is edited in silence",guardRunEdit(fresh,{quantity:600})===null);
+t("a run with output asks before the quantity changes",!!guardRunEdit(run,{quantity:1200}));
+t("cutting below what was made is called out",/below what has already been made/.test(guardRunEdit(run,{quantity:100})));
+t("changing what it makes asks too",/does not change what was already made/.test(guardRunEdit(run,{item:"something else"})));
+t("moving it to another station asks",/does not move what was already made/.test(guardRunEdit(run,{line:"Assembly"})));
+t("a running job asks even with nothing recorded",!!guardRunEdit({...fresh,status:"Running"},{line:"Line 2"}));
+
+console.log("\nRemoving a run keeps what it made:");
+const impact=runDeleteImpact(d,"WO-121");
+t("the question can say what is at stake",impact.made===620&&impact.scrap===14&&impact.steps===2,JSON.stringify(impact).slice(0,90));
+const after=deleteRun(d,"WO-121");
+t("the run is gone",!after.workOrders.some(w=>w.id==="WO-121"));
+const steps=after.prodDays.flatMap(x=>x.steps).filter(x=>x.id==="ps-m1"||x.id==="ps-m2");
+t("its days go back to being planned work",steps.every(x=>!x.workOrderId));
+// 620 across two 500-bottle days: the first is full, the second keeps 120. The bottles exist either way.
+t("the first day keeps the 500 it was credited with",steps.find(x=>x.id==="ps-m1").actualQty===500);
+t("and the second keeps its 120",steps.find(x=>x.id==="ps-m2").actualQty===120);
+t("the finished day still reads as done",stepProgress(steps.find(x=>x.id==="ps-m1"),after.workOrders,after.prodDays.flatMap(x=>x.steps)).done===true);
+t("and the record says where those units came from",/WO-121 before it was removed/.test(steps.find(x=>x.id==="ps-m1").note||""));
+// A run that never produced anything just releases its days.
+const clean=normalize({...d,workOrders:d.workOrders.map(w=>w.id==="WO-121"?{...w,good:0,scrap:0}:w)});
+const afterClean=deleteRun(clean,"WO-121");
+t("a run that made nothing leaves no phantom production",
+  afterClean.prodDays.flatMap(x=>x.steps).filter(x=>x.id==="ps-m1").every(x=>x.actualQty===undefined&&!x.workOrderId));
+t("removing a run that does not exist changes nothing",deleteRun(d,"WO-nope").workOrders.length===d.workOrders.length);
+
+const drawer=readFileSync(new URL("../app/components/drawers.tsx",import.meta.url),"utf8");
+t("the drawer edits a run through the guard",drawer.includes("guardRunEdit(")&&drawer.includes("RunEditor"));
+t("and deletes through deleteRun",drawer.includes("deleteRun("));
+// The old fields committed on every keystroke; the editor saves once.
+t("editing a run no longer writes on every keystroke",!/onChange=\{e=>upd\(\{(line|date|quantity)/.test(drawer));
 }
 
 // One calendar, not two. The month grid and the day list were separate screens drawing overlapping
