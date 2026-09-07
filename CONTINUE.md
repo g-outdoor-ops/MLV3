@@ -17,8 +17,8 @@ to invoicing or payments as touching real money.
 
 ## The state of play
 
-`main` is deployed and pushed through **`3af0039`**. There is **uncommitted work in the tree** for
-Phase 3 — wholesale orders planned onto the calendar.
+`main` is deployed and pushed through **`3af0039`**. Committed on top and **not pushed**: `8ff28e0`
+(Phase 3, wholesale orders planned onto the calendar) and the warehouse link.
 
 The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
 The production rebuild is `4b2ed00` (Phase 1, model), `8c0bf42` (Phase 2, the calendar) and Phase 3 in
@@ -187,7 +187,7 @@ Demo data adds wholesale steps on top (Palm Aqua's 500 plain 5-gallon bottles on
 plan already fills that line) so the over-capacity warning has a real collision to show, plus one
 part-recorded step so the guard and reconcile have something true to protect. The live seed is Amazon only.
 
-### Phase 3 — wholesale orders become production (in the tree, uncommitted)
+### Phase 3 — wholesale orders become production (`8ff28e0`)
 
 The calendar can now fill itself in from the record instead of from somebody's memory. A paid order
 appears in a panel at the top of Production plan with what it still needs, where it fits, and the date
@@ -221,6 +221,43 @@ involved for a copy in the test file to prove anything about the code that ships
 (the `engines` field still says `>=22.13 <23`, so on 22.13–22.17 those assertions fail loudly rather
 than passing quietly). Worth bumping `engines`, or moving the rest of the suites the same way.
 
+### The warehouse link (in the tree, uncommitted)
+
+A no-login URL for the shop tablet: `/floor?t=<token>`. It shows the production schedule, records what
+was made against each step, and updates the run in front of the operator. The owner creates and replaces
+it from **Settings & access** (the card the `warehouse-link.css` in this repo was written for years ago
+and never wired up).
+
+The token is a bearer credential and it will leak eventually — a photographed screen, a forwarded
+message, a phone that walks out of the building. Both halves of the design follow from assuming that:
+
+- **It reads a hand-built subset, never the company record.** `floorView` in `app/server/floor.ts` is an
+  allow-list: the schedule, open runs, and — for orders the floor is actually being asked to make — the
+  customer's *name*, the quantity, the date needed and the note sales left. No contact details, no
+  addresses, no prices, no costs, no invoices, no balances, no settings, no QuickBooks. A field added to
+  `AppData` later cannot leak by simply existing, and `tests/warehouse-link.test.mjs` asserts that.
+- **It never accepts a company record.** `/api/floor` has no PUT. Its whole vocabulary is three verbs —
+  record a step, add to a run's counts, change a run's status — and the server builds every patch
+  itself. A leaked link cannot reprice the catalogue or delete a customer because there is no way to ask.
+  The floor also cannot mark its own work Done: finishing hands the run to quality, as in the app.
+
+Numbers arriving from a page anyone can rewrite are cleaned, not trusted: a run can never report more
+than it was for, negatives are refused, and the name the tablet gives is a self-declared label that is
+stripped and recorded as `Warehouse link · <name>` so the audit log never implies somebody signed in.
+Writes read-then-write against the stored version and retry once, which is correct here in a way it is
+not for the main app — the patch is small, so re-applying it to fresher data is exactly right.
+
+`tokenMatches` refuses a stored token under 8 characters and never authenticates an unset one: a company
+that has not made a link must not be one where the empty string is the password. `newFloorToken` drops
+the characters that get misread off a screen, because somebody will type it into a tablet by hand.
+
+`tsconfig.json` gained `allowImportingTsExtensions`, and `app/server/floor.ts` imports `../app-data.ts`
+with its extension, so the tests can load the module Node's own way and check it as it ships.
+
+**Not exercised against a live server.** The pure functions are covered; `/api/floor` itself needs a
+database, so the route — token check, retry, audit line — has not been run end to end. Worth doing once
+on Render before the tablet is handed over.
+
 ### Still open on Phase 3
 
 - **No re-planning.** Change an order's quantity after it is planned and the steps do not follow. The
@@ -245,7 +282,7 @@ than passing quietly). Worth bumping `engines`, or moving the rest of the suites
 
 - **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
   `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
-  Run with `node tests/<name>.test.mjs`. 163 assertions.
+  Run with `node tests/<name>.test.mjs`. 213 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.

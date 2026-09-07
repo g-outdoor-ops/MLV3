@@ -180,3 +180,60 @@
 .plan-todo-foot span{font-size:.84rem;font-weight:700;color:#177044}
 .plan-todo-foot span.late{color:#b3261e}
 .plan-todo-foot button:disabled{opacity:.55;cursor:default}
+
+/* ── The warehouse link page ─────────────────────────────────────────────────
+   A tablet on a shop floor: gloves, glare, and someone who wants to press one
+   button and get back to the machine. Big targets, one column, no dialogs. */
+.floor-link .floor-link-body{padding:22px;max-width:820px;margin:0 auto}
+.floor-link-company{color:#aab7ae;font-weight:700}
+.floor-link .no-login-chip{margin-left:auto}
+.floor-link-empty{color:#c4cfc8;font-size:1.05rem;padding:40px 22px;text-align:center;line-height:1.6}
+.floor-link-who{background:#1b2620;border:1px solid #34443a;border-radius:12px;padding:12px 14px;margin-bottom:18px}
+.floor-link-who p{margin:0;color:#c4cfc8}
+.floor-link-who b{color:#fff}
+.floor-link-who form{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}
+.floor-link-who label{display:block;color:#c4cfc8;font-size:.8rem;font-weight:800}
+.floor-link-who input{display:block;width:100%;margin-top:5px;padding:12px;border:1px solid #3d4c42;border-radius:9px;
+  background:#101713;color:#f4f8f5;font-size:1.05rem}
+.floor-link-who .link-button{color:#e08a44}
+
+.floor-link-section{margin-bottom:26px}
+.floor-link-section h2{color:#8fa096;font-size:.78rem;text-transform:uppercase;letter-spacing:.09em;margin:0 0 10px}
+.floor-link-none{color:#8b978f;background:#1b2620;border-radius:12px;padding:16px;margin:0}
+
+.floor-link-run{background:#fff;color:#17211b;border-radius:14px;padding:16px 18px;margin-bottom:12px}
+.floor-link-run.running{border-left:5px solid #2f9e6b}
+.floor-link-run header{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.floor-link-run header b{display:block;font-size:1.1rem}
+.floor-link-run header small{display:block;color:#6d7a70;margin-top:3px}
+.floor-link-status{background:#eef3ef;color:#3c4b42;border-radius:999px;padding:5px 10px;font-size:.72rem;font-weight:900;white-space:nowrap}
+.floor-link-counts{margin:8px 0 12px;color:#4a5a50;font-size:.9rem;font-variant-numeric:tabular-nums}
+.floor-link-run .progress{height:10px;border-radius:6px;background:#eef2ef;overflow:hidden;margin-top:12px}
+.floor-link-run .progress span{display:block;height:100%;background:#2f9e6b}
+.floor-link-actions{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.floor-link-actions button{flex:1 1 150px;min-height:56px;border-radius:11px}
+.floor-link-actions button:disabled{opacity:.45}
+
+.floor-link-day{background:#1b2620;border:1px solid #34443a;border-radius:14px;padding:14px 16px;margin-bottom:12px}
+.floor-link-day.today{border-color:#d56c24}
+.floor-link-day header{margin-bottom:10px}
+.floor-link-day header b{color:#fff;font-size:1rem}
+.floor-link-day header small{display:block;color:#8b978f;margin-top:3px}
+.floor-link-today{background:#d56c24;color:#fff;border-radius:999px;padding:2px 9px;font-size:.7rem;font-weight:900;margin-left:8px}
+.floor-link-step{background:#fff;color:#17211b;border-radius:11px;padding:12px 14px;margin-top:10px}
+.floor-link-step.done{opacity:.6}
+.floor-link-step-top{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.floor-link-step-top b{font-size:1rem}
+.floor-link-type{background:#eaf2ed;color:#176942;border-radius:999px;padding:3px 10px;font-size:.72rem;font-weight:900}
+.floor-link-qty{margin-left:auto;color:#68756c;font-size:.85rem;font-variant-numeric:tabular-nums}
+.floor-link-note{margin:7px 0 0;font-size:.85rem;color:#6d7a70;line-height:1.5}
+.floor-link-note em{font-style:normal;font-weight:800;color:#a84e13;margin-right:7px}
+.floor-link-done{margin:9px 0 0;color:#177044;font-weight:800;font-size:.85rem}
+.floor-link-step .giant{margin-top:11px;min-height:58px}
+
+.floor-link-enter{background:#f4f8f5;border-radius:11px;padding:12px;margin-top:11px;display:grid;gap:10px}
+.floor-link-enter label{display:block;font-size:.8rem;font-weight:800;color:#4a5a50}
+.floor-link-enter input{display:block;width:100%;margin-top:5px;padding:14px;border:1px solid #bdc9c0;border-radius:9px;
+  font-size:1.4rem;font-weight:800;text-align:center}
+.floor-link-enter-actions{display:flex;gap:10px}
+.floor-link-enter-actions button{flex:1;min-height:52px;border-radius:10px}

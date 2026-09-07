@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { STAGES, STAGE_NEW, STAGE_QUOTED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, documentTotal, dueDays, freeStock, orderTotals, seedData, stageOf, hasDemoData, type InventoryRow } from "../app-data";
+import { newFloorToken, STAGES, STAGE_NEW, STAGE_QUOTED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, documentTotal, dueDays, freeStock, orderTotals, seedData, stageOf, hasDemoData, type InventoryRow } from "../app-data";
 import { authCall, qboCall, type AuthUser } from "./auth";
 import { CheckRow, ControlMetric, Decision, Kpi, MiniRow, PlRow, ReportCard, SettingRow, StatusLine, downloadCsv, num, useApp, usd, usd2 } from "./store";
 import { Customers, DocList, Leads, OrdersPage, ProductionCalendar } from "./sales";
@@ -196,7 +196,7 @@ export function SettingsWorkspace(){
   const ship=data.settings.shipMethods||[];
   const clearDemo=()=>{commit(v=>({...seedData,settings:{...v.settings,company:v.settings.company.includes("Pure Alkaline")?"":v.settings.company,ownerName:v.settings.ownerName,ownerEmail:v.settings.ownerEmail.endsWith(".test")?"":v.settings.ownerEmail,quickBooks:v.settings.quickBooks},itemRates:v.itemRates.filter(r=>/gallon|cap/i.test(r.item)),inventory:v.inventory.filter(i=>/gallon|cap|preform|handle|carton/i.test(i.item)).map(i=>({...i,onHand:0,committed:0,onOrder:0,eta:undefined}))}),"reset","Sample records removed");setConfirm("");notify("Sample customers, orders, invoices and work orders removed. Products and materials kept with zero counts.","Settings & access")};
   const clearAll=()=>{commit(v=>({...seedData,settings:{...seedData.settings,company:v.settings.company,ownerName:v.settings.ownerName,ownerEmail:v.settings.ownerEmail,quickBooks:v.settings.quickBooks}}),"reset","All company data cleared");setConfirm("");notify("Company data cleared","Settings & access")};
-  return <><p className="eyebrow">Owner administration</p><h1>Settings & access</h1><p className="intro">Company account, people and sign-ins, pricing rules, shipping, and QuickBooks.</p><MainAccountSettings/><PeopleManager/>
+  return <><p className="eyebrow">Owner administration</p><h1>Settings & access</h1><p className="intro">Company account, people and sign-ins, pricing rules, shipping, and QuickBooks.</p><MainAccountSettings/><WarehouseLink/><PeopleManager/>
     <div className="settings-layout"><section className="panel qb-panel"><div className="integration-head"><div className="qb-logo">qb</div><div><h2>QuickBooks Online</h2><p>{qboStatus?.connected?`Connected to ${qboStatus.company||qb.realmId}${qboStatus.env==="sandbox"?" (sandbox)":""}`:qboStatus?.configured===false?"Server keys are not set yet.":"Connect your QuickBooks company. Invoices, payments and customers are created there from here."}</p></div><span className={qboStatus?.connected?"connected":"not-connected"}>{qboStatus?.connected?"Connected":qboStatus?.error&&qb.connected?"Needs attention":"Not connected"}</span></div>
       {qboStatus?.error&&<p className="form-error">QuickBooks: {qboStatus.error}</p>}
       {!qboStatus?.connected?<>{qboStatus?.configured===false?<div className="sync-rules"><b>One-time setup (owner)</b><p>1. Create an app at developer.intuit.com (QuickBooks Online Accounting scope). 2. Set its redirect URI to <code>{typeof window!=="undefined"?`${location.origin}/api/qbo/callback`:"/api/qbo/callback"}</code>. 3. Add <code>QBO_CLIENT_ID</code>, <code>QBO_CLIENT_SECRET</code>, <code>QBO_REDIRECT_URI</code> and <code>QBO_ENV=production</code> to the Render environment and redeploy. Then this button connects.</p></div>:null}<a className="qb-connect" href="/api/qbo/connect" style={{display:"block",textAlign:"center",textDecoration:"none",opacity:qboStatus?.configured===false?.5:1}}>Connect to QuickBooks</a></>
@@ -208,6 +208,44 @@ export function SettingsWorkspace(){
         {confirm==="demo"?<div className="button-row"><button className="secondary" onClick={clearDemo}>Yes, remove sample records</button><button className="cancel" onClick={()=>setConfirm("")}>Cancel</button></div>:hasDemoData(data)?<SettingRow label="Remove sample records" value="Keeps products, zeroes stock" onClick={()=>setConfirm("demo")}/>:null}
         {confirm==="all"?<div className="button-row"><button className="secondary" onClick={clearAll}>Yes, clear everything</button><button className="cancel" onClick={()=>setConfirm("")}>Cancel</button></div>:<SettingRow label="Clear all company data" value="Cannot be undone" onClick={()=>setConfirm("all")}/>}</section>
     </aside></div></>;
+}
+
+/**
+ * The warehouse link: a no-login URL for the shop tablet.
+ *
+ * It is a key, not a page — whoever has the URL is in — so this says so plainly rather than burying it,
+ * and replacing it is one button away for the day a phone goes missing. What it opens is narrow by
+ * design: the schedule, the steps, and the runs. No customers' details, no prices, no invoices.
+ */
+export function WarehouseLink(){
+  const {data,commit,notify}=useApp();
+  const [copied,setCopied]=useState(false);
+  const [confirming,setConfirming]=useState(false);
+  const token=data.settings.warehouseToken||"";
+  const url=token&&typeof window!=="undefined"?`${window.location.origin}/floor?t=${token}`:"";
+  const make=(replacing:boolean)=>{
+    const next=newFloorToken();
+    commit(v=>({...v,settings:{...v.settings,warehouseToken:next}}),"settings.warehouseLink",replacing?"Warehouse link replaced":"Warehouse link created");
+    setConfirming(false);setCopied(false);
+    notify(replacing?"New warehouse link created — the old one stopped working straight away":"Warehouse link created — send it to the tablet","Settings & access");
+  };
+  const copy=async()=>{try{await navigator.clipboard.writeText(url);setCopied(true);setTimeout(()=>setCopied(false),2500)}catch{notify("Could not copy — select the link and copy it by hand","Settings & access")}};
+  return <section className="panel warehouse-link-card">
+    <div className="warehouse-link-icon">⚑</div>
+    <div>
+      <div className="panel-title"><div><h2>Warehouse link</h2><p>The shop tablet opens the schedule with this link and no sign-in. It can record what was made and move a run along — nothing else.</p></div><span className="no-login-chip">NO LOGIN</span></div>
+      {url?<>
+        <div className="link-copy-row"><code>{url}</code><button className="primary" onClick={copy}>{copied?"Copied":"Copy link"}</button></div>
+        <p className="link-warning">Anyone with this link can see the production schedule and record work against it. It shows no customer contact details, prices or invoices. If a tablet or phone goes missing, replace the link — the old one stops working immediately.</p>
+        {confirming
+          ?<div className="button-row"><button className="secondary" onClick={()=>make(true)}>Yes, replace it</button><button className="cancel" onClick={()=>setConfirming(false)}>Cancel</button></div>
+          :<button className="link-button" onClick={()=>setConfirming(true)}>Replace this link</button>}
+      </>:<>
+        <p className="link-warning">No link yet. Create one and send it to the tablet — it stays valid until you replace it.</p>
+        <div className="button-row"><button className="primary" onClick={()=>make(false)}>Create the warehouse link</button></div>
+      </>}
+    </div>
+  </section>;
 }
 
 export function MainAccountSettings(){const{data,commit,notify,authUser}=useApp();const[company,setCompany]=useState(data.settings.company);const save=()=>{commit(v=>({...v,settings:{...v.settings,company,ownerName:authUser?.name||v.settings.ownerName,ownerEmail:authUser?.email||v.settings.ownerEmail}}),"settings.account","Company settings updated");notify("Company settings saved","Settings & access")};

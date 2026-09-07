@@ -709,6 +709,14 @@ export function normalize(d:AppData):AppData{
 export const hasDemoData=(d:AppData)=>/pure alkaline/i.test(d.settings?.company||"")||d.customers.some(c=>/\.test$/i.test(c.email))||d.settings?.ownerEmail?.endsWith(".test")===true;
 export const todayIso=()=>new Date().toISOString().slice(0,10);
 
+/**
+ * A fresh warehouse-link token. The URL is the only thing standing between this link and the
+ * schedule, so it is long and random — and it drops the characters that get misread off a screen
+ * (l/1, o/0), because someone will end up typing it into a tablet by hand.
+ */
+export const newFloorToken=()=>
+  "floor-"+Array.from(crypto.getRandomValues(new Uint8Array(18)),b=>"abcdefghijkmnpqrstuvwxyz23456789"[b%32]).join("");
+
 // ---- dates -----------------------------------------------------------------
 // Dates were stored two different ways: documents raised here saved a year-less display string
 // ("Fri, Sep 5") while invoices imported from QuickBooks saved ISO ("2026-09-05"). Overdue detection
