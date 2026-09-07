@@ -4,7 +4,10 @@
 // previous UI keeps loading.
 
 export type Customer={id:string;name:string;kind:"customer"|"lead";contact:string;email:string;phone:string;rep:string;stage:string;balance:number;lifetimeSales:number;billing:string;delivery:string;terms:string;notes:string;prices?:Record<string,number>;qb?:boolean;qboId?:string};
-export type DocumentRecord={id:string;kind:"quote"|"invoice";customerId:string;item:string;cases:number;rate:number;discount:number;shipping:number;status:string;due:string;paid:number;orderId?:string;quantity?:number;qbSynced?:boolean;note?:string;qboId?:string;qboDocNumber?:string;paymentQboId?:string;
+// `fee` is the processing fee charged for taking payment — a line on the invoice, never discounted, and
+// part of the total the customer is asked for. It is stored rather than recomputed so the figure here
+// and the figure QuickBooks billed can never drift apart.
+export type DocumentRecord={id:string;kind:"quote"|"invoice";customerId:string;item:string;cases:number;rate:number;discount:number;shipping:number;fee?:number;status:string;due:string;paid:number;orderId?:string;quantity?:number;qbSynced?:boolean;note?:string;qboId?:string;qboDocNumber?:string;paymentQboId?:string;
   // Imported from QuickBooks: the document exactly as the books hold it. `total` is authoritative and
   // must never be recomputed — see documentTotal.
   lines?:OrderLine[];total?:number;balance?:number;txnDate?:string;source?:"quickbooks"};
@@ -56,6 +59,8 @@ export type AssemblyCap={component:string;qty:number};   // "Screw cap" × 2
 // The two caps this shop fits. They decide the neck, and so the mould: screw caps need a screw-top
 // blank, silicone caps sit on a regular one.
 export const CAP_KINDS=["Screw cap","Silicone cap"];
+/** What the processing fee is called on the invoice the customer reads. */
+export const PROCESSING_FEE_LABEL="Processing fee";
 export type Sku={
   id:string;name:string;              // "D5-T0WT-Q5XP", "5 Gal + 2 Screw Caps"
   channel:"amazon"|"wholesale"|"both";
@@ -185,7 +190,10 @@ export type ShipMethod={id:string;name:string;sub:string;rate:number;perCase?:nu
 export type MaintenanceItem={id:string;machine:string;task:string;due:string;status:"Due"|"Scheduled"|"Complete";downtimeMin?:number;notes?:string};
 export type PurchaseOrder={id:string;supplier:string;item:string;quantity:number;unitCost:number;freight:number;duty:number;eta:string;status:"Open"|"Received"|"Cancelled";createdAt:string;receivedAt?:string};
 export type AppData={blanks?:Blank[];skus?:Sku[];prodDays?:ProdDay[];customers:Customer[];documents:DocumentRecord[];orders:OrderRecord[];workOrders:WorkOrder[];calendar:CalendarEvent[];notices:Notice[];activities:Activity[];roles:RoleSetting[];itemRates:ItemRate[];inventory:InventoryRow[];maintenance?:MaintenanceItem[];purchaseOrders?:PurchaseOrder[];
-  settings:{company:string;ownerName:string;ownerEmail:string;warehouseToken:string;lines?:string[];machines?:Machine[];shipMethods?:ShipMethod[];discountApproval?:number;monthlyExpenses?:number;cashOnHand?:number;quickBooks:{connected:boolean;realmId:string;lastSync:string;customers:boolean;invoices:boolean;quotes:boolean;conflicts:number}}};
+  settings:{company:string;ownerName:string;ownerEmail:string;warehouseToken:string;lines?:string[];machines?:Machine[];shipMethods?:ShipMethod[];discountApproval?:number;
+    // Charged on every invoice for taking payment. Card payment is off, so customers pay by bank
+    // transfer; this covers what that costs instead of it coming out of the margin.
+    paymentFee?:number;monthlyExpenses?:number;cashOnHand?:number;quickBooks:{connected:boolean;realmId:string;lastSync:string;customers:boolean;invoices:boolean;quotes:boolean;conflicts:number}}};
 
 // The stages the shop actually works in. The old list ran Placed → In production → … → Invoiced →
 // Paid, i.e. make first and bill last, which is backwards for this business: nothing goes on a machine
@@ -226,7 +234,7 @@ export const seedData:AppData={
  customers:[],documents:[],orders:[],workOrders:[],calendar:[],notices:[],activities:[],
  roles:[{id:"r1",name:"Owner",members:[],permissions:{all:"edit"}},{id:"r2",name:"Sales",members:[],permissions:{crm:"edit",sales:"edit",calendar:"view",financials:"none",operations:"view",settings:"none"}},{id:"r3",name:"Warehouse",members:[],permissions:{crm:"none",sales:"view",calendar:"view",financials:"none",operations:"edit",settings:"none"}}],
  itemRates:[],inventory:[],maintenance:[],purchaseOrders:[],
- settings:{company:"",ownerName:"",ownerEmail:"",warehouseToken:"",lines:["Line 1"],shipMethods:DEFAULT_SHIP,discountApproval:5,monthlyExpenses:0,cashOnHand:0,quickBooks:{connected:false,realmId:"",lastSync:"Never",customers:true,invoices:true,quotes:true,conflicts:0}},
+ settings:{company:"",ownerName:"",ownerEmail:"",warehouseToken:"",lines:["Line 1"],shipMethods:DEFAULT_SHIP,discountApproval:5,paymentFee:25,monthlyExpenses:0,cashOnHand:0,quickBooks:{connected:false,realmId:"",lastSync:"Never",customers:true,invoices:true,quotes:true,conflicts:0}},
 };
 
 export const demoData:AppData={
@@ -320,8 +328,11 @@ export const demoData:AppData={
 // still single-item and compute as before.
 export const documentTotal=(d:DocumentRecord)=>{
   if(d.total!=null)return Math.round(d.total*100)/100;
-  if(d.lines&&d.lines.length)return Math.round((d.lines.reduce((a,l)=>a+l.quantity*l.rate,0)*(1-d.discount/100)+d.shipping)*100)/100;
-  return Math.round((((d.quantity??d.cases)*d.rate)*(1-d.discount/100)+d.shipping)*100)/100;
+  // The fee sits outside the discount, like shipping: a discount is on the goods, not on the cost of
+  // taking the money.
+  const fee=d.fee||0;
+  if(d.lines&&d.lines.length)return Math.round((d.lines.reduce((a,l)=>a+l.quantity*l.rate,0)*(1-d.discount/100)+d.shipping+fee)*100)/100;
+  return Math.round((((d.quantity??d.cases)*d.rate)*(1-d.discount/100)+d.shipping+fee)*100)/100;
 };
 // What is still owed. QuickBooks tells us directly; otherwise fall back to total less amount paid.
 export const documentBalance=(d:DocumentRecord)=>d.balance!=null?Math.round(d.balance*100)/100:Math.max(0,Math.round((documentTotal(d)-(d.paid||0))*100)/100);
@@ -1046,7 +1057,7 @@ export function normalize(d:AppData):AppData{
     // `source` is defaulted for safety only — every step written by this app sets it explicitly.
     prodDays:(d.prodDays??SEPTEMBER_PLAN).map(day=>({...day,steps:(day.steps||[]).map(st=>({...st,source:st.source||"wholesale"}))})),
     calendar:d.calendar||[],notices:d.notices||[],activities:d.activities||[],roles:d.roles||seedData.roles,documents:d.documents||[],
-    settings:{...seedData.settings,...s,lines:s.lines||["Line 1"],machines:s.machines?.length?s.machines:DEFAULT_MACHINES,shipMethods:(s.shipMethods&&s.shipMethods.some(m=>m.custom)?s.shipMethods:[...(s.shipMethods||DEFAULT_SHIP).filter(m=>!m.custom),DEFAULT_SHIP[DEFAULT_SHIP.length-1]]),discountApproval:s.discountApproval??5,monthlyExpenses:s.monthlyExpenses??0,cashOnHand:s.cashOnHand??0,quickBooks:{...seedData.settings.quickBooks,...(s.quickBooks||{})}}};
+    settings:{...seedData.settings,...s,lines:s.lines||["Line 1"],machines:s.machines?.length?s.machines:DEFAULT_MACHINES,shipMethods:(s.shipMethods&&s.shipMethods.some(m=>m.custom)?s.shipMethods:[...(s.shipMethods||DEFAULT_SHIP).filter(m=>!m.custom),DEFAULT_SHIP[DEFAULT_SHIP.length-1]]),discountApproval:s.discountApproval??5,paymentFee:s.paymentFee??25,monthlyExpenses:s.monthlyExpenses??0,cashOnHand:s.cashOnHand??0,quickBooks:{...seedData.settings.quickBooks,...(s.quickBooks||{})}}};
 }
 
 /** True when the record still holds sample customers (starter or demo data). */

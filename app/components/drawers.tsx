@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { DEFAULT_QC, DEFAULT_SHIP, STAGES, STAGE_NEW, STAGE_INVOICED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, ASSEMBLY_LINE, canStartProduction, deleteRun, documentBalance, documentTotal, dueDays, dueIso, fmtDay, guardRunEdit, orderTotals, runDeleteImpact, stageOf, todayIso, type Customer, type DocumentRecord, type WorkOrder, fmtDue} from "../app-data";
+import { DEFAULT_QC, DEFAULT_SHIP, STAGES, STAGE_NEW, STAGE_INVOICED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, ASSEMBLY_LINE, PROCESSING_FEE_LABEL, canStartProduction, deleteRun, documentBalance, documentTotal, dueDays, dueIso, fmtDay, guardRunEdit, orderTotals, runDeleteImpact, stageOf, todayIso, type Customer, type DocumentRecord, type WorkOrder, fmtDue} from "../app-data";
 import { DetailField, ProfileSection, nextId, now, num, uid, useApp, usd2, type Role } from "./store";
 import { qboCall } from "./auth";
 
@@ -49,11 +49,14 @@ export function RecordDrawer({id,close}:{id:string;close:()=>void}){
     const qbOn=data.settings.quickBooks.connected;
     const makeInvoice=async(paidNow=false)=>{const invId=nextId("INV-",data.documents.filter(x=>x.kind==="invoice").map(x=>x.id),1042);const due=new Date();due.setDate(due.getDate()+30);
       let qbo:{qboId?:string;docNumber?:string;customerId?:string}={};
-      if(qbOn&&customer){try{const r=await qboCall({op:"invoice.create",invoice:{docNumber:invId,customer:{id:customer.id,name:customer.name,contact:customer.contact,email:customer.email,phone:customer.phone,billing:customer.billing,delivery:customer.delivery,qboId:customer.qboId},lines:t.lines,discountPct:order.discount||0,shipping:t.ship,dueDate:due.toISOString().slice(0,10),memo:order.invoiceNote,email:customer.email}});qbo=r as typeof qbo;if(paidNow&&qbo.qboId&&qbo.customerId)await qboCall({op:"payment.create",qboId:qbo.qboId,customerQboId:qbo.customerId,amount:t.total,method:"Card at pickup"})}catch(e){notify(`QuickBooks: ${e instanceof Error?e.message:"failed"} — invoice not created`,"Invoices",true);return}}
-      act(v=>({...v,documents:[{id:invId,kind:"invoice",customerId:order.customerId,orderId:order.id,item:t.lines.map(l=>l.item).join(" + "),cases:t.cases,quantity:order.quantity,rate:t.lines[0]?.rate||0,discount:order.discount||0,shipping:t.ship,status:paidNow?"Paid":"Open",due:paidNow?"—":fmtDay(due),paid:paidNow?t.total:0,qbSynced:!!qbo.qboId,qboId:qbo.qboId,qboDocNumber:qbo.docNumber,note:order.invoiceNote},...v.documents],
-        orders:v.orders.map(x=>x.id===order.id?{...x,invoiceId:invId,stage:Math.max(st,paidNow?STAGE_PAID:STAGE_INVOICED),stageV2:true,status:STAGES[Math.max(st,paidNow?STAGE_PAID:STAGE_INVOICED)],payment:paidNow?"Paid":`${usd2(t.total)} due`}:x),
-        customers:v.customers.map(c=>c.id===order.customerId?{...c,qb:c.qb||!!qbo.qboId,qboId:qbo.customerId||c.qboId,balance:c.balance+(paidNow?0:t.total),lifetimeSales:c.lifetimeSales+t.total}:c),
-        activities:[activity(order.customerId,paidNow?"Paid by card":"Invoice created",`${invId} · ${usd2(t.total)}${qbo.qboId?" · QuickBooks #"+qbo.docNumber:""}`),...v.activities]}),"invoice.create",`${invId} for ${order.id}`,paidNow?`Card payment of ${usd2(t.total)} recorded — ${invId} paid${qbo.qboId?" in QuickBooks":""}`:`Invoice ${invId} created${qbo.qboId?" in QuickBooks":""}`,"Invoices")};
+      // Charged for taking payment, on the invoice and in our own total, so the two cannot drift.
+      const fee=data.settings.paymentFee??0;
+      const billed=Math.round((t.total+fee)*100)/100;
+      if(qbOn&&customer){try{const r=await qboCall({op:"invoice.create",invoice:{docNumber:invId,customer:{id:customer.id,name:customer.name,contact:customer.contact,email:customer.email,phone:customer.phone,billing:customer.billing,delivery:customer.delivery,qboId:customer.qboId},lines:t.lines,discountPct:order.discount||0,shipping:t.ship,fee,dueDate:due.toISOString().slice(0,10),memo:order.invoiceNote,email:customer.email}});qbo=r as typeof qbo;if(paidNow&&qbo.qboId&&qbo.customerId)await qboCall({op:"payment.create",qboId:qbo.qboId,customerQboId:qbo.customerId,amount:billed,method:"Card at pickup"})}catch(e){notify(`QuickBooks: ${e instanceof Error?e.message:"failed"} — invoice not created`,"Invoices",true);return}}
+      act(v=>({...v,documents:[{id:invId,kind:"invoice",customerId:order.customerId,orderId:order.id,item:t.lines.map(l=>l.item).join(" + "),cases:t.cases,quantity:order.quantity,rate:t.lines[0]?.rate||0,discount:order.discount||0,shipping:t.ship,fee,total:billed,status:paidNow?"Paid":"Open",due:paidNow?"—":fmtDay(due),paid:paidNow?billed:0,qbSynced:!!qbo.qboId,qboId:qbo.qboId,qboDocNumber:qbo.docNumber,note:order.invoiceNote},...v.documents],
+        orders:v.orders.map(x=>x.id===order.id?{...x,invoiceId:invId,stage:Math.max(st,paidNow?STAGE_PAID:STAGE_INVOICED),stageV2:true,status:STAGES[Math.max(st,paidNow?STAGE_PAID:STAGE_INVOICED)],payment:paidNow?"Paid":`${usd2(billed)} due`}:x),
+        customers:v.customers.map(c=>c.id===order.customerId?{...c,qb:c.qb||!!qbo.qboId,qboId:qbo.customerId||c.qboId,balance:c.balance+(paidNow?0:billed),lifetimeSales:c.lifetimeSales+billed}:c),
+        activities:[activity(order.customerId,paidNow?"Paid by card":"Invoice created",`${invId} · ${usd2(billed)}${qbo.qboId?" · QuickBooks #"+qbo.docNumber:""}`),...v.activities]}),"invoice.create",`${invId} for ${order.id}`,paidNow?`Card payment of ${usd2(billed)} recorded — ${invId} paid${qbo.qboId?" in QuickBooks":""}`:`Invoice ${invId} created${qbo.qboId?" in QuickBooks":""}`,"Invoices")};
     const sendLink=async()=>{if(!inv?.qboId){notify(qbOn?"This invoice isn't in QuickBooks yet":"Connect QuickBooks (Settings & access) to email invoices with a Pay Now link","Invoices");return}try{await qboCall({op:"invoice.send",qboId:inv.qboId,email:customer?.email});notify(`Invoice emailed from QuickBooks to ${customer?.email||customer?.name} with a Pay Now link`,"Invoices")}catch(e){notify(`QuickBooks: ${e instanceof Error?e.message:"send failed"}`,"Invoices",true)}};
     // Payments are taken on the invoice itself. That path asks for the amount and the method, refuses a
     // second click while the first is in flight, and trusts the balance the server actually applied — none
@@ -168,6 +171,7 @@ export function RecordDrawer({id,close}:{id:string;close:()=>void}){
           <div><span>Subtotal</span><b>{usd2(dsub)}</b></div>
           {doc.discount?<div><span>Discount {doc.discount}%</span><b>−{usd2(dsub*doc.discount/100)}</b></div>:null}
           {doc.shipping?<div><span>Shipping</span><b>{usd2(doc.shipping)}</b></div>:null}
+          {doc.fee?<div><span>{PROCESSING_FEE_LABEL}</span><b>{usd2(doc.fee)}</b></div>:null}
           <div className="grand"><span>Total</span><b>{usd2(total)}</b></div>
           {doc.kind==="invoice"&&<><div><span>Paid</span><b>{usd2(doc.paid||0)}</b></div>
             <div className={dbal>0?"due":""}><span>Balance due</span><b>{usd2(dbal)}</b></div></>}

@@ -1,6 +1,6 @@
 "use client";
 import { useState, type ChangeEvent, type FormEvent } from "react";
-import { CAP_KINDS, DEFAULT_BLANKS, DEFAULT_QC, DEFAULT_SHIP, STAGE_NEW, daysFromNow, estimateOrder, fmtDue, fmtDay, freeStock, orderTotals, todayIso, type Customer, type DocumentRecord, type OrderLine, type OrderRecord, type WorkOrder } from "../app-data";
+import { CAP_KINDS, DEFAULT_BLANKS, DEFAULT_QC, DEFAULT_SHIP, STAGES, STAGE_INVOICED, STAGE_NEW, daysFromNow, estimateOrder, fmtDue, fmtDay, freeStock, orderTotals, todayIso, type Customer, type DocumentRecord, type OrderLine, type OrderRecord, type WorkOrder } from "../app-data";
 import { CrmSection, nextId, now, num, uid, useApp, usd2, type Modal } from "./store";
 import { qboCall } from "./auth";
 
@@ -33,9 +33,10 @@ export function OrderModal({kind,close,presetCustomer,fromQuote}:{kind:"order"|"
   // an unambiguous date to work from instead of a year-less string.
   const dueLabel=due;
 
-  // What the shop can actually promise for this order, taken at the back of the line behind everything
-  // already on the machines and everything already sold. This is the number that goes to the customer.
-  const estimate=kind==="order"&&priced.length?estimateOrder(data,priced):null;
+  // What the shop can actually promise, taken at the back of the line behind everything already on the
+  // machines and everything already sold. A quote needs this as much as an order does — it is the date
+  // being quoted — and an invoice raised on its own is work somebody is expecting too.
+  const estimate=priced.length?estimateOrder(data,priced):null;
   const promisedLate=estimate&&due&&estimate.finish>due?Math.round((new Date(estimate.finish+"T12:00:00Z").getTime()-new Date(due+"T12:00:00Z").getTime())/864e5):0;
 
   const [saving,setSaving]=useState(false);
@@ -58,20 +59,39 @@ export function OrderModal({kind,close,presetCustomer,fromQuote}:{kind:"order"|"
       notify(`Order ${id} saved — ${usd2(t.total)}${estimate?` · promised ${fmtDue(estimate.finish)}`:""}${needsApproval?" · waiting for owner approval":""}`,"Orders",needsApproval);close();openRecord(id);
     } else {
       const id=nextId(kind==="quote"?"Q-":"INV-",data.documents.filter(x=>x.kind===kind).map(x=>x.id),kind==="quote"?2040:1042);
+      // The processing fee is charged for taking payment, so it belongs on the invoice, not the quote.
+      const fee=kind==="invoice"?(data.settings.paymentFee??0):0;
+      const billed=Math.round((t.total+fee)*100)/100;
       let qbo:{qboId?:string;docNumber?:string;customerId?:string;total?:number;balance?:number}={};
-      if(kind==="invoice"&&data.settings.quickBooks.connected){try{qbo=await qboCall({op:"invoice.create",invoice:{docNumber:id,customer:{id:cust.id,name:cust.name,contact:cust.contact,email:cust.email,phone:cust.phone,billing:cust.billing,delivery:cust.delivery,qboId:cust.qboId},lines:priced,discountPct:disc,shipping:t.ship,dueDate:due,memo:custNote,email:cust.email}}) as typeof qbo}catch(e){notify(`QuickBooks: ${e instanceof Error?e.message:"failed"} — invoice not created`,"Invoices",true);return}}
+      if(kind==="invoice"&&data.settings.quickBooks.connected){try{qbo=await qboCall({op:"invoice.create",invoice:{docNumber:id,customer:{id:cust.id,name:cust.name,contact:cust.contact,email:cust.email,phone:cust.phone,billing:cust.billing,delivery:cust.delivery,qboId:cust.qboId},lines:priced,discountPct:disc,shipping:t.ship,fee,dueDate:due,memo:custNote,email:cust.email}}) as typeof qbo}catch(e){notify(`QuickBooks: ${e instanceof Error?e.message:"failed"} — invoice not created`,"Invoices",true);return}}
       // Keep every line and the computed total. item/cases/rate remain only as the one-line summary the
       // list views show; storing rate as priced[0].rate and re-multiplying it by the summed quantity is
       // what made a multi-line document display the wrong money. When QuickBooks created the invoice its
       // TotalAmt is authoritative — it is what the customer will actually be billed.
-      const doc:DocumentRecord={id,kind,customerId:cust.id,item:priced.map(l=>l.item).join(" + "),cases:t.cases,quantity:draft.quantity,rate:priced[0].rate,discount:disc,shipping:t.ship,status:kind==="quote"?(needsApproval?"Awaiting approval":"Draft"):"Open",due:dueLabel,paid:0,note:custNote,qbSynced:!!qbo.qboId,qboId:qbo.qboId,qboDocNumber:qbo.docNumber,
+      const doc:DocumentRecord={id,kind,customerId:cust.id,item:priced.map(l=>l.item).join(" + "),cases:t.cases,quantity:draft.quantity,rate:priced[0].rate,discount:disc,shipping:t.ship,fee,status:kind==="quote"?(needsApproval?"Awaiting approval":"Draft"):"Open",due:dueLabel,paid:0,note:custNote,qbSynced:!!qbo.qboId,qboId:qbo.qboId,qboDocNumber:qbo.docNumber,
         lines:priced.map(l=>({item:l.item,quantity:l.quantity,rate:l.rate})),
-        total:typeof qbo.total==="number"?qbo.total:t.total,
-        balance:kind==="invoice"?(typeof qbo.balance==="number"?qbo.balance:t.total):undefined};
-      commit(v=>({...v,documents:[doc,...v.documents],customers:v.customers.map(c=>c.id===cust.id?{...c,stage:c.kind==="lead"&&kind==="quote"?"Quote sent":c.stage,balance:kind==="invoice"?Math.round((c.balance+(typeof qbo.total==="number"?qbo.total:t.total))*100)/100:c.balance,qboId:qbo.customerId||c.qboId,qb:c.qb||!!qbo.qboId}:c),
+        total:typeof qbo.total==="number"?qbo.total:billed,
+        balance:kind==="invoice"?(typeof qbo.balance==="number"?qbo.balance:billed):undefined};
+      // An invoice raised on its own is work the shop has been asked for, so it gets its own order —
+      // but at Invoiced, not Confirmed. The money gate then does the rest: it sits in the line with a
+      // promised date and cannot reach a machine until a deposit or payment in full lands, which is
+      // what "created, not finalised until it is paid" means in this app.
+      const soId=kind==="invoice"?nextId("SO-",data.orders.map(o=>o.id),1187):"";
+      const soRec:OrderRecord|null=kind==="invoice"?{id:soId,customerId:cust.id,item:priced.map(l=>l.item).join(" + "),
+        cases:t.cases,quantity:draft.quantity,due:dueLabel,status:STAGES[STAGE_INVOICED],payment:`${usd2(billed)} due`,
+        lines:priced,shipMethod:ship,shipping:t.ship,discount:disc,notes,invoiceNote:custNote,
+        stage:STAGE_INVOICED,stageV2:true,invoiceId:id,rep:user,createdAt:new Date().toISOString(),
+        ...(estimate?{promised:estimate.finish}:{})}:null;
+      commit(v=>({...v,documents:[soRec?{...doc,orderId:soId}:doc,...v.documents],
+        orders:soRec?[soRec,...v.orders]:v.orders,
+        inventory:soRec?v.inventory.map(row=>{const l=priced.find(x=>x.item===row.item);return l?{...row,committed:row.committed+l.quantity}:row}):v.inventory,
+        customers:v.customers.map(c=>c.id===cust.id?{...c,stage:c.kind==="lead"&&kind==="quote"?"Quote sent":c.stage,balance:kind==="invoice"?Math.round((c.balance+(typeof qbo.total==="number"?qbo.total:billed))*100)/100:c.balance,qboId:qbo.customerId||c.qboId,qb:c.qb||!!qbo.qboId}:c),
         notices:needsApproval&&kind==="quote"?[{id:uid("n"),title:`Quote ${id} needs approval`,detail:`${cust.name} · ${underFloor.length?"price under the floor":disc+"% discount"}`,urgent:true,read:false,createdAt:now(),target:"Quotes"},...v.notices]:v.notices,
         activities:[{id:uid("a"),customerId:cust.id,title:kind==="quote"?"Quote created":"Invoice created",detail:`${id} · ${usd2(t.total)}`,actor:user,createdAt:now()},...v.activities]}),`${kind}.create`,`${id} for ${cust.name}`);
-      notify(kind==="quote"?(needsApproval?`Quote ${id} sent to the owner for approval`:`Quote ${id} saved — open it to email`):`Invoice ${id} created${qbo.qboId?" in QuickBooks":""}`,kind==="quote"?"Quotes":"Invoices");close();
+      notify(kind==="quote"
+        ?(needsApproval?`Quote ${id} sent to the owner for approval`:`Quote ${id} saved — open it to email`)
+        :`Invoice ${id} created${qbo.qboId?" in QuickBooks":""}${fee?` · ${usd2(fee)} processing fee`:""}${soRec?` · ${soId} is in the line, waiting on payment${estimate?` · promised ${fmtDue(estimate.finish)}`:""}`:""}`,
+        kind==="quote"?"Quotes":"Invoices");close();
     }
     }finally{setSaving(false)}   // released on every path, including the early return when QuickBooks fails
   };
@@ -92,11 +112,14 @@ export function OrderModal({kind,close,presetCustomer,fromQuote}:{kind:"order"|"
     </div>
     {estimate&&<div className={`order-estimate${promisedLate?" late":""}`}>
       <div>
-        <span>Can be finished</span>
+        <span>{kind==="order"?"Can be finished":"If accepted today, can be finished"}</span>
         <strong>{fmtDue(estimate.finish)}</strong>
         <small>{estimate.toMake?`${num(estimate.toMake)} to make`:"from stock"} · {estimate.ahead?`${estimate.ahead} order${estimate.ahead===1?"":"s"} ahead`:"nothing ahead"} · this one would be #{estimate.position} in line</small>
       </div>
-      {promisedLate>0&&<p>The date asked for is {promisedLate} day{promisedLate===1?"":"s"} before the machines can have it. Tell the customer {fmtDue(estimate.finish)}, or move something ahead of it.</p>}
+      {promisedLate>0&&<p>The date {kind==="invoice"?"on this invoice":"asked for"} is {promisedLate} day{promisedLate===1?"":"s"} before the machines can have it. Tell the customer {fmtDue(estimate.finish)}, or move something ahead of it.</p>}
+      {/* A quote or an invoice raised on its own creates no order, so nothing reaches the floor from
+          here. The date is what could be done, not what has been booked. */}
+      {kind!=="order"&&<p className="estimate-note">This {kind} does not put anything in the line. {kind==="quote"?"Accepting it creates the order that does.":"Raise the order as well if the shop has to make it."}</p>}
     </div>}
     <div className="quote-total"><span>{num(draft.quantity)} bottles · {t.cases} boxes{disc?` · less ${disc}%`:""} · shipping {t.ship?usd2(t.ship):"free"}{short.length?` · ${short.length} item${short.length>1?"s":""} will need a production run`:""}</span><strong>{usd2(t.total)}</strong></div>
     {needsApproval&&<p className="link-warning">{underFloor.length?"A price is below the owner's floor.":`Discount is over ${limit}%.`} This will be saved and sent to Christopher for approval before it goes to the customer.</p>}

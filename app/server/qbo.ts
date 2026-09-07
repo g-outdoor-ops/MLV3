@@ -1,6 +1,7 @@
 // QuickBooks Online: OAuth 2.0 connection plus the handful of API calls the app needs
 // (customers, invoices, payments, invoice email, balance sync). Tokens live in qbo_tokens
 // and refresh automatically; nothing secret ever reaches the browser.
+import { PROCESSING_FEE_LABEL as PROCESSING_FEE } from "../app-data.ts";
 import { audit, getDb } from "./db";
 
 export const qboConfig=()=>({
@@ -46,7 +47,7 @@ export async function ensureItem(name:string,unitPrice:number){if(itemCache.has(
   const r=await api<{Item:{Id:string}}>("POST","item",{Name:name,Type:"NonInventory",UnitPrice:unitPrice,IncomeAccountRef:{value:await incomeAccountId()}});itemCache.set(name,String(r.Item.Id));return String(r.Item.Id)}
 
 // ---- invoices ----
-export type InvoiceIn={docNumber:string;customer:CustomerIn;lines:{item:string;quantity:number;rate:number}[];discountPct:number;shipping:number;dueDate:string;memo?:string;email?:string};
+export type InvoiceIn={docNumber:string;customer:CustomerIn;lines:{item:string;quantity:number;rate:number}[];discountPct:number;shipping:number;fee?:number;dueDate:string;memo?:string;email?:string};
 export async function createInvoice(inv:InvoiceIn){
   // Idempotent by document number. A double-click, a retry after a timeout, or a network hiccup that
   // hides a response which actually succeeded would otherwise bill the customer twice for the same
@@ -62,7 +63,13 @@ export async function createInvoice(inv:InvoiceIn){
   // charge too, and the QuickBooks total then disagreed with the total shown here.
   if(inv.discountPct>0)Line.push({DetailType:"DiscountLineDetail",Amount:0,DiscountLineDetail:{PercentBased:true,DiscountPercent:inv.discountPct}});
   if(inv.shipping>0)Line.push({DetailType:"SalesItemLineDetail",Amount:inv.shipping,Description:"Shipping",SalesItemLineDetail:{ItemRef:{value:await ensureItem("Shipping",0)},Qty:1,UnitPrice:inv.shipping}});
-  const body:Record<string,unknown>={CustomerRef:{value:customerId},DocNumber:inv.docNumber,DueDate:inv.dueDate,Line,CustomerMemo:inv.memo?{value:inv.memo}:undefined,BillEmail:inv.email?{Address:inv.email}:undefined,AllowOnlineCreditCardPayment:true,AllowOnlineACHPayment:true};
+  // After the discount line, deliberately: a discount is on the goods, not on the cost of taking the
+  // money. It is a visible line so the customer can see exactly what it is.
+  if(inv.fee&&inv.fee>0)Line.push({DetailType:"SalesItemLineDetail",Amount:inv.fee,Description:PROCESSING_FEE,SalesItemLineDetail:{ItemRef:{value:await ensureItem(PROCESSING_FEE,0)},Qty:1,UnitPrice:inv.fee}});
+  // Bank transfer only. With card payment enabled the customer can choose the route that costs ~2.9%,
+  // which on a five-figure invoice is real money out of the margin — so the invoice offers the one the
+  // fee above is priced for.
+  const body:Record<string,unknown>={CustomerRef:{value:customerId},DocNumber:inv.docNumber,DueDate:inv.dueDate,Line,CustomerMemo:inv.memo?{value:inv.memo}:undefined,BillEmail:inv.email?{Address:inv.email}:undefined,AllowOnlineCreditCardPayment:false,AllowOnlineACHPayment:true};
   const r=await api<{Invoice:{Id:string;DocNumber:string;TotalAmt:number;Balance:number}}>("POST","invoice",body);
   await audit("quickbooks","qbo.invoice",`${inv.docNumber} → QuickBooks invoice ${r.Invoice.Id}`);
   return {qboId:String(r.Invoice.Id),docNumber:String(r.Invoice.DocNumber),total:Number(r.Invoice.TotalAmt),balance:Number(r.Invoice.Balance),customerId}}

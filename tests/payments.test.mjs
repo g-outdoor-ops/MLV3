@@ -68,5 +68,36 @@ t("discount sits above shipping",lines.findIndex(l=>l.type==="discountPct")<line
 t("discount applies to goods only",goodsAbove===6000,`base ${goodsAbove}`);
 t("total is right",Math.round((6000*0.95+150)*100)/100===5850);
 
+// ---------------------------------------------------------------------------
+// What the invoice offers the customer, and what a directly-raised invoice does about production.
+console.log("\nInvoices go out for bank transfer only:");
+const { readFileSync } = await import("node:fs");
+const qbo=readFileSync(new URL("../app/server/qbo.ts",import.meta.url),"utf8");
+t("card payment is off",/AllowOnlineCreditCardPayment:false/.test(qbo));
+t("bank transfer is on",/AllowOnlineACHPayment:true/.test(qbo));
+// The fee must sit AFTER the discount line: a QuickBooks percentage discount applies to every line
+// above it, so a fee placed before it would be silently discounted.
+const feeAt=qbo.indexOf("inv.fee"),discAt=qbo.indexOf("DiscountLineDetail");
+t("the fee line comes after the discount line",feeAt>discAt&&discAt>0,`fee ${feeAt}, discount ${discAt}`);
+t("the fee is a visible line, not buried in a total",/Description:PROCESSING_FEE/.test(qbo));
+
+console.log("\nBoth places that raise an invoice charge the same fee:");
+const modals=readFileSync(new URL("../app/components/modals.tsx",import.meta.url),"utf8");
+const drawers=readFileSync(new URL("../app/components/drawers.tsx",import.meta.url),"utf8");
+for(const [name,src] of [["the invoice modal",modals],["invoicing from an order",drawers]]){
+  t(`${name} reads the fee from settings`,/paymentFee\?\?0/.test(src));
+  t(`${name} sends it to QuickBooks`,/shipping:t\.ship,fee,/.test(src));
+  t(`${name} stores what was billed`,/billed/.test(src));
+}
+// A quote is not a payment, so it carries no fee.
+t("a quote carries no processing fee",/kind==="invoice"\?\(data\.settings\.paymentFee\?\?0\):0/.test(modals));
+
+console.log("\nAn invoice raised on its own still reaches the shop:");
+t("it creates an order",/const soRec:OrderRecord\|null=kind==="invoice"/.test(modals));
+// Created, not finalised: the money gate is what releases it, exactly as for any other order.
+t("the order sits at Invoiced, not Confirmed",/stage:STAGE_INVOICED/.test(modals));
+t("it carries the date the line quoted",/promised:estimate\.finish/.test(modals));
+t("and the invoice knows which order it raised",/orderId:soId/.test(modals));
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail?1:0);

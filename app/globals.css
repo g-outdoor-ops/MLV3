@@ -305,3 +305,4 @@
 .rush-preview input{display:block;width:100%;margin-top:4px;padding:9px 10px;border:1px solid #e0cfa4;border-radius:8px;background:#fff;font-size:.9rem}
 .rush-actions{display:flex;gap:9px;flex-wrap:wrap}
 .rush-actions button{flex:1 1 160px;padding:10px;border-radius:8px;font-weight:700}
+.order-estimate .estimate-note{color:#6d7a70;font-weight:600}

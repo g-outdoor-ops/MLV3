@@ -45,5 +45,30 @@ t("balance is total less paid",documentBalance(partly)===4143,`${documentBalance
 const qboSays={...stored,paid:2000,balance:4143.01};
 t("QuickBooks' balance wins when present",documentBalance(qboSays)===4143.01,`${documentBalance(qboSays)}`);
 
+// ---------------------------------------------------------------------------
+// The processing fee. Card payment is off and the customer pays by bank transfer, so the invoice
+// carries the cost of taking the money as its own line. The figure here and the figure QuickBooks
+// billed must never differ — that mismatch is what three earlier money bugs were made of.
+let app=null;
+try{app=await import("../app/app-data.ts")}catch(e){console.log("  note: "+e.message.split("\n")[0])}
+t("the app module can be imported",!!app,"needs Node 22.18+");
+if(app){
+const {documentTotal,documentBalance,normalize,seedData,PROCESSING_FEE_LABEL}=app;
+console.log("\nThe fee is on the invoice and in the total:");
+const lines=[{item:"5-Gallon Bottle · 2 caps",quantity:500,rate:9.4}];
+const base={id:"INV-1",kind:"invoice",customerId:"c1",item:"x",cases:250,rate:9.4,discount:0,shipping:312,status:"Open",due:"2026-10-07",paid:0,lines};
+t("without a fee the total is goods plus shipping",documentTotal(base)===5012);
+t("the fee is added on top",documentTotal({...base,fee:25})===5037,`${documentTotal({...base,fee:25})}`);
+// A discount is on the goods, not on the cost of taking the money — the same rule shipping follows.
+t("a discount does not eat the fee",documentTotal({...base,discount:10,fee:25})===5037-470,`${documentTotal({...base,discount:10,fee:25})}`);
+t("the balance owed includes it",documentBalance({...base,fee:25})===5037);
+t("paying the goods still leaves the fee owing",documentBalance({...base,fee:25,paid:5012})===25);
+// QuickBooks is authoritative once it has billed: a stored total wins over anything recomputed here.
+t("a total QuickBooks gave us is never second-guessed",documentTotal({...base,fee:25,total:5037})===5037);
+t("the fee has one name in the app and in QuickBooks",PROCESSING_FEE_LABEL==="Processing fee");
+t("a new company starts with the $25 fee set",normalize(seedData).settings.paymentFee===25);
+t("and an owner can set it to nothing",normalize({...seedData,settings:{...seedData.settings,paymentFee:0}}).settings.paymentFee===0);
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail?1:0);

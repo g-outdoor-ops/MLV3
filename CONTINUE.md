@@ -17,9 +17,9 @@ to invoicing or payments as touching real money.
 
 ## The state of play
 
-`main` is deployed and pushed through **`9d0fa57`** — Phases 1-5. Committed and **not pushed**:
-`577510f` (Phase 6 — assembly runs and the production queue) and Phase 7 in the tree — urgent orders,
-and editing or deleting a run.
+`main` is deployed and pushed through **`fb26f61`** — Phases 1-7. Phase 8 is in the tree, uncommitted:
+invoices go out for bank transfer only with a processing fee, and an invoice raised on its own creates
+the order behind it.
 
 The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
 The production rebuild is `4b2ed00` (Phase 1, model), `8c0bf42` (Phase 2, the calendar) and Phase 3 in
@@ -311,7 +311,7 @@ orders for anything short of stock, which was a third mechanism putting work on 
 of capacity. An order joins the queue instead, gets a real date, and becomes steps on the calendar when
 the money lands.
 
-### Phase 7 — urgent orders, and editing a run (in the tree, uncommitted)
+### Phase 7 — urgent orders, and editing a run (`ad39a8a`)
 
 **Urgent.** An order can be moved to the front of the line for a customer in a bind. `order.rush` carries
 who did it, when, and why — because moving one order forward moves everybody behind it back, and in
@@ -340,8 +340,33 @@ saying where they came from. Those bottles physically exist; deleting the paperw
 unmaking them. A run that produced nothing simply releases its days. The confirmation says which of the
 two is about to happen.
 
+### Phase 8 — invoices: bank transfer only, and the order behind them (in the tree, uncommitted)
+
+Answers to what the owner asked, and the two changes he chose.
+
+- **Placing an order still touches nothing in QuickBooks.** It creates the order, commits stock and puts
+  it in the line. Invoicing is two deliberate steps from the order drawer — *Create invoice in
+  QuickBooks*, then *Email invoice / pay link*. Nothing reaches a customer without a press.
+- **Bank transfer only.** Every invoice used to go out with `AllowOnlineCreditCardPayment:true`, so a
+  customer could pick the ~2.9% route on a five-figure invoice. Card is off; ACH is on.
+- **A processing fee on every invoice**, `settings.paymentFee`, default $25, editable under Pricing
+  rules. It is a visible line the customer can read, it is added **after** the discount line (a
+  QuickBooks percentage discount applies to every line above it, so a fee placed before it would be
+  silently discounted), and it is stored on the document as `fee` and inside the stored `total` so what
+  this app shows and what QuickBooks billed cannot drift. Quotes carry no fee — a quote is not a payment.
+- **The estimate now shows on quotes and invoices**, not just orders, worded as what could be done
+  rather than what has been booked.
+- **An invoice raised on its own creates its order** — at `STAGE_INVOICED`, not Confirmed. It joins the
+  line with a promised date and the money gate does the rest: it cannot reach a machine until a deposit
+  or payment in full lands. That is "created, not finalised until it is paid" in the model that already
+  existed.
+
 ### Still open
 
+- **A quote does not mention the fee**, so a quoted total and the invoice that follows differ by $25.
+  Worth a line of small print on the quote before a customer notices it first.
+- **The fee is charged even when payment never goes through QuickBooks** (a cheque, cash on pickup). It
+  is one number in settings and can be zeroed per company, but not per invoice.
 - **Palletizing and shipping steps have no run**, so they keep their own record. Correct today — no work
   order models them — but "who recorded this" still comes from two places depending on the step type.
 - **Only the owner can mark an order urgent.** A rep on the phone has to ask, which is probably right —
@@ -415,7 +440,7 @@ on Render before the tablet is handed over.
 
 - **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
   `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
-  Run with `node tests/<name>.test.mjs`. 304 assertions.
+  Run with `node tests/<name>.test.mjs`. 331 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.
