@@ -71,3 +71,91 @@
    sideways scroll nobody uses on a phone. */
 @media(max-width:1100px){.flow-board{grid-template-columns:repeat(4,minmax(180px,1fr))}}
 @media(max-width:760px){.flow-board{grid-template-columns:1fr}.flow-col{min-height:0}}
+
+/* ── Production plan ─────────────────────────────────────────────────────────
+   The mixed calendar. Two colours carry the whole story: which side of the
+   business a step is for (Amazon indigo, wholesale amber) and whether a day
+   asks more of a machine than a shift can give (red). Nothing else is
+   coloured, so an over-capacity day is the only thing that shouts. */
+.plan-toolbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:18px 0 14px}
+.plan-month{display:flex;align-items:center;gap:10px}
+.plan-month strong{min-width:150px;text-align:center;font-size:1.05rem}
+.plan-month button{border:1px solid #cdd7d0;background:#fff;border-radius:8px;width:32px;height:32px;font-size:1.1rem;color:#3d4c43}
+.plan-toolbar .segmented{margin-bottom:0}
+.plan-toolbar-note{font-size:.78rem;color:#7b8880;flex:1 1 220px}
+
+/* The guard's question. It sits above the days because nothing may be written
+   until it is answered — never a browser confirm, which cannot say this much. */
+.plan-guard{border:1px solid #e8c98d;background:#fdf8ec;border-radius:12px;padding:16px 18px;margin-bottom:16px}
+.plan-guard p{margin:0 0 12px;color:#5a4715;line-height:1.5}
+.plan-guard-actions{display:flex;gap:10px;flex-wrap:wrap}
+
+.plan-day{background:#fff;color:#17211b;border:1px solid #dfe6e1;border-radius:14px;padding:16px 18px;margin-bottom:12px}
+.plan-day.today{border-color:#9fb3a6;box-shadow:0 0 0 3px #eaf2ed}
+.plan-day.over{border-color:#e6a9a2}
+.plan-day-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px}
+.plan-day-head b{font-size:1rem}
+.plan-day-head small{display:block;color:#7b8880;font-size:.8rem;margin-top:3px}
+.plan-today{background:#e5f0e8;color:#146541;border-radius:999px;padding:2px 9px;font-size:.7rem;font-weight:800;margin-left:8px}
+.plan-milestone{background:#efeafd;color:#4b32a8;border-radius:999px;padding:2px 9px;font-size:.7rem;font-weight:800;margin-left:8px}
+
+.plan-machines{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.plan-meter{display:grid;grid-template-columns:1fr auto;gap:2px 10px;align-items:center;font-size:.8rem}
+.plan-meter-name{color:#5d6b62;font-weight:700}
+.plan-meter b{font-variant-numeric:tabular-nums;font-size:.85rem}
+.plan-meter em{grid-column:1/-1;font-style:normal;color:#b3261e;font-weight:800;font-size:.75rem}
+.plan-bar{grid-column:1/-1;position:relative;display:flex;height:9px;border-radius:5px;background:#eef2ef;overflow:hidden;margin:3px 0}
+.plan-bar i{display:block;height:100%}
+.plan-bar .src-amazon{background:#5a6fd8}
+.plan-bar .src-wholesale{background:#d9a02b}
+.plan-meter.over .plan-bar{background:#f7dedb}
+.plan-cap{position:absolute;top:-2px;bottom:-2px;width:2px;background:#3d4c43;text-decoration:none}
+.plan-over-note{margin:10px 0 0;color:#b3261e;font-size:.82rem;font-weight:700;line-height:1.45}
+
+.plan-steps{margin-top:14px;border-top:1px solid #eef1ee}
+.plan-step{border-bottom:1px solid #f1f4f2;padding:10px 0}
+.plan-step.done{opacity:.72}
+.plan-step-main{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.plan-step-main b{font-size:.92rem}
+.plan-chip{border-radius:999px;padding:2px 9px;font-size:.7rem;font-weight:800;letter-spacing:.02em}
+.plan-chip.type-mold{background:#eaf2ed;color:#176942}
+.plan-chip.type-assemble{background:#f2eef8;color:#5a3fa8}
+.plan-chip.type-palletize{background:#f0f2f5;color:#4a5a6b}
+.plan-chip.type-ship{background:#fff0e5;color:#a84e13}
+.plan-chip.src-amazon{background:#eaedfb;color:#3b4ba8}
+.plan-chip.src-wholesale{background:#fbf2e0;color:#8a6410}
+.plan-qty{color:#68756c;font-size:.82rem;font-variant-numeric:tabular-nums}
+.plan-state{margin-left:auto;font-size:.75rem;font-weight:800;color:#7b8880}
+.plan-state.part{color:#94620d}
+.plan-state.done{color:#177044}
+.plan-step-note{margin:5px 0 0;font-size:.8rem;color:#6d7a70;line-height:1.5}
+.plan-step-note em{font-style:normal;font-weight:800;color:#3d4c43;margin-right:7px}
+.plan-step-note i{display:block;font-style:normal;color:#8a958d;font-size:.75rem;margin-top:3px}
+.plan-step-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.plan-step-actions .secondary{padding:7px 11px;font-size:.8rem}
+.plan-empty{color:#a3ada7;font-size:.85rem;padding:10px 0;margin:0}
+
+.plan-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;align-items:end;
+  background:#f7fbf8;border:1px solid #cddbd2;border-radius:10px;padding:12px 14px;margin-top:10px}
+.plan-form label{display:block;font-size:.78rem;font-weight:800;color:#4a5a50}
+.plan-form input,.plan-form select{width:100%;margin-top:4px;padding:9px 10px;border:1px solid #cddbd2;border-radius:8px;background:#fff;font-size:.95rem}
+.plan-form-actions{display:flex;gap:8px;grid-column:1/-1}
+.plan-form-actions button{flex:1;padding:10px;border-radius:8px;font-weight:700}
+
+/* Order flow and the production plan are the two screens the floor shares with
+   the office, and the floor shell is dark — so their headings need to invert.
+   The cards on them stay white, which means their text has to be pushed back to
+   dark: the shell sets a near-white body colour that white cards would inherit,
+   and a 5,556 in #f4f8f5 on #fff is a number nobody can read. */
+.floor-workspace .heading-row h1{color:#fff}
+.floor-workspace .heading-row .intro,.floor-workspace .heading-row .sub{color:#aab7ae}
+.floor-workspace .plan-toolbar-note{color:#8b978f}
+.floor-workspace .plan-month strong{color:#eef3ef}
+.floor-workspace .kpi,.floor-workspace .panel,.floor-workspace .flow-card,
+.floor-workspace .plan-form input,.floor-workspace .plan-form select{color:#17211b}
+
+@media(max-width:760px){
+  .plan-machines{grid-template-columns:1fr}
+  .plan-state{margin-left:0}
+  .plan-form{grid-template-columns:1fr}
+}

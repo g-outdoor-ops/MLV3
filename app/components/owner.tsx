@@ -7,7 +7,7 @@ import { Customers, DocList, Leads, OrdersPage, ProductionCalendar } from "./sal
 
 export const ownerGroups=[
   {label:"Sales & customers",items:["Order flow","Customers","Leads","Orders","Invoices","Quotes"]},
-  {label:"Production",items:["Work orders","Production calendar","Quality","Maintenance"]},
+  {label:"Production",items:["Work orders","Production plan","Production calendar","Quality","Maintenance"]},
   {label:"Inventory & purchasing",items:["Inventory","Purchasing","Item rates"]},
   {label:"Financials",items:["Profit & loss","Reports"]},
   {label:"Administration",items:["Settings & access"]},

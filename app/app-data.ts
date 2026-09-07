@@ -81,10 +81,88 @@ export const DEFAULT_MACHINES:Machine[]=[
   {id:"m5",name:"5-gallon line",makes:"5-gal",perShift:500},
   {id:"m3",name:"3-gallon line",makes:"3-gal",perShift:500},
 ];
+// ---- the September plan ------------------------------------------------------------
+// The month the tracker covers, as production steps rather than a spreadsheet. Quantities are the
+// tracker's own per-SKU demand — 2,176 / 1,320 / 704 / 288 / 448 — and they reproduce its headline
+// figures exactly: 1,440 regular 5-gal blanks, 4,936 bottles to mould, 6,992 screw caps, 1,024
+// silicone. tests/production.test.mjs asserts that against this array, so the plan cannot drift from
+// the tracker without the tests saying so.
+//
+// The day layout is derived, not transcribed: moulding is laid out at one shift per machine per
+// working day, screw-top necks first so the single 5-gallon mould change falls over a weekend, then
+// assembly, palletizing and the FBA shipment. Every step here is Amazon replenishment; wholesale
+// work lands on the same two machines and is added to these days as orders are taken.
+const ms=(id:string,date:string,target:string,qty:number,machineId:string):{date:string;step:ProdStep}=>
+  ({date,step:{id,type:"mold",source:"amazon",target,qty,machineId}});
+const as=(id:string,date:string,target:string,qty:number,type:ProdStep["type"]):{date:string;step:ProdStep}=>
+  ({date,step:{id,type,source:"amazon",target,qty,...(type==="ship"?{linkedTo:"FBA-SEP"}:{})}});
+
+const SEPTEMBER_STEPS:{date:string;step:ProdStep}[]=[
+  // 5-gallon line — screw-top first (2,176), then the regular neck (1,440). 8 shifts in all.
+  ms("ps-m1","2026-09-07","b-s5",500,"m5"),ms("ps-m2","2026-09-08","b-s5",500,"m5"),
+  ms("ps-m3","2026-09-09","b-s5",500,"m5"),ms("ps-m4","2026-09-10","b-s5",500,"m5"),
+  ms("ps-m5","2026-09-11","b-s5",176,"m5"),
+  ms("ps-m6","2026-09-14","b-r5",500,"m5"),ms("ps-m7","2026-09-15","b-r5",500,"m5"),
+  ms("ps-m8","2026-09-16","b-r5",440,"m5"),
+  // 3-gallon line — 1,320 screw-top, 3 shifts, running alongside the 5-gallon line.
+  ms("ps-m9","2026-09-07","b-s3",500,"m3"),ms("ps-m10","2026-09-08","b-s3",500,"m3"),
+  ms("ps-m11","2026-09-09","b-s3",320,"m3"),
+  // Assembly — caps and boxing. GO is bottle-only but still gets labelled and boxed.
+  as("ps-a1","2026-09-10","MI-89OO-OBNM",1320,"assemble"),
+  as("ps-a2","2026-09-15","D5-T0WT-Q5XP",2176,"assemble"),
+  as("ps-a3","2026-09-17","GO-WAAU-08PA",704,"assemble"),
+  as("ps-a4","2026-09-17","BV-B81Q-X4UN",288,"assemble"),
+  as("ps-a5","2026-09-18","MV-1AA8-B2UV",448,"assemble"),
+  // Pallets, then the shipment.
+  as("ps-p1","2026-09-21","D5-T0WT-Q5XP",2176,"palletize"),
+  as("ps-p2","2026-09-21","MI-89OO-OBNM",1320,"palletize"),
+  as("ps-p3","2026-09-22","GO-WAAU-08PA",704,"palletize"),
+  as("ps-p4","2026-09-22","BV-B81Q-X4UN",288,"palletize"),
+  as("ps-p5","2026-09-22","MV-1AA8-B2UV",448,"palletize"),
+  as("ps-s1","2026-09-23","D5-T0WT-Q5XP",2176,"ship"),
+  as("ps-s2","2026-09-23","MI-89OO-OBNM",1320,"ship"),
+  as("ps-s3","2026-09-23","GO-WAAU-08PA",704,"ship"),
+  as("ps-s4","2026-09-23","BV-B81Q-X4UN",288,"ship"),
+  as("ps-s5","2026-09-23","MV-1AA8-B2UV",448,"ship"),
+];
+const DAY_LABELS:Record<string,{forWhat?:string;milestone?:boolean}>={
+  "2026-09-07":{forWhat:"Screw-top run starts — both lines"},
+  "2026-09-11":{forWhat:"Screw-top 5-gal finishes"},
+  "2026-09-14":{forWhat:"Mould change — regular 5-gal neck"},
+  "2026-09-16":{forWhat:"Moulding complete for the month"},
+  "2026-09-23":{forWhat:"Amazon FBA shipment leaves",milestone:true},
+};
+
+/** Group loose steps into days, newest date last, keeping any labels the day carries. */
+export function buildPlan(entries:{date:string;step:ProdStep}[],labels:Record<string,{forWhat?:string;milestone?:boolean}>={}):ProdDay[]{
+  const byDate=new Map<string,ProdDay>();
+  for(const {date,step} of entries){
+    if(!byDate.has(date))byDate.set(date,{date,...(labels[date]||{}),steps:[]});
+    byDate.get(date)!.steps.push(step);
+  }
+  return [...byDate.values()].sort((a,b)=>a.date.localeCompare(b.date));
+}
+export const SEPTEMBER_PLAN:ProdDay[]=buildPlan(SEPTEMBER_STEPS,DAY_LABELS);
+
+// Demo company only: the same September plan with wholesale work dropped onto it, which is what a
+// real month actually looks like. Palm Aqua's 500 plain 5-gallon bottles land on the 8th, where the
+// Amazon plan already fills the 5-gallon line for the day — precisely the collision this calendar
+// exists to catch. One Amazon step is part-recorded so the edit guard and the owner's reconcile have
+// something true to protect.
+const DEMO_WHOLESALE:{date:string;step:ProdStep}[]=[
+  {date:"2026-09-08",step:{id:"pd-w1",type:"mold",source:"wholesale",target:"b-r5",qty:500,machineId:"m5",linkedTo:"SO-1187",note:"Palm Aqua · plain 5-gal, no kitting"}},
+  {date:"2026-09-10",step:{id:"pd-w2",type:"mold",source:"wholesale",target:"b-r3",qty:120,machineId:"m3",linkedTo:"SO-1188",note:"Sunshine Coolers · 3-gal"}},
+  {date:"2026-09-11",step:{id:"pd-w3",type:"palletize",source:"wholesale",target:"b-r5",qty:500,linkedTo:"SO-1187",note:"Double-wrapped, per Ray"}},
+  {date:"2026-09-14",step:{id:"pd-w4",type:"ship",source:"wholesale",target:"b-r5",qty:500,linkedTo:"SO-1187",note:"LTL to Palm Aqua"}},
+];
+export const demoPlan=():ProdDay[]=>buildPlan([
+  ...SEPTEMBER_STEPS.map(e=>({...e,step:{...e.step,...(e.step.id==="ps-m1"?{actualQty:200,scrap:4,doneAt:"2026-09-07",doneBy:"Warehouse"}:{})}})),
+  ...DEMO_WHOLESALE],DAY_LABELS);
+
 export type ShipMethod={id:string;name:string;sub:string;rate:number;perCase?:number;custom?:boolean};
 export type MaintenanceItem={id:string;machine:string;task:string;due:string;status:"Due"|"Scheduled"|"Complete";downtimeMin?:number;notes?:string};
 export type PurchaseOrder={id:string;supplier:string;item:string;quantity:number;unitCost:number;freight:number;duty:number;eta:string;status:"Open"|"Received"|"Cancelled";createdAt:string;receivedAt?:string};
-export type AppData={blanks?:Blank[];skus?:Sku[];customers:Customer[];documents:DocumentRecord[];orders:OrderRecord[];workOrders:WorkOrder[];calendar:CalendarEvent[];notices:Notice[];activities:Activity[];roles:RoleSetting[];itemRates:ItemRate[];inventory:InventoryRow[];maintenance?:MaintenanceItem[];purchaseOrders?:PurchaseOrder[];
+export type AppData={blanks?:Blank[];skus?:Sku[];prodDays?:ProdDay[];customers:Customer[];documents:DocumentRecord[];orders:OrderRecord[];workOrders:WorkOrder[];calendar:CalendarEvent[];notices:Notice[];activities:Activity[];roles:RoleSetting[];itemRates:ItemRate[];inventory:InventoryRow[];maintenance?:MaintenanceItem[];purchaseOrders?:PurchaseOrder[];
   settings:{company:string;ownerName:string;ownerEmail:string;warehouseToken:string;lines?:string[];machines?:Machine[];shipMethods?:ShipMethod[];discountApproval?:number;monthlyExpenses?:number;cashOnHand?:number;quickBooks:{connected:boolean;realmId:string;lastSync:string;customers:boolean;invoices:boolean;quotes:boolean;conflicts:number}}};
 
 // The stages the shop actually works in. The old list ran Placed → In production → … → Invoiced →
@@ -130,6 +208,7 @@ export const seedData:AppData={
 };
 
 export const demoData:AppData={
+ blanks:DEFAULT_BLANKS,skus:DEFAULT_SKUS,prodDays:demoPlan(),
  customers:[
   {id:"c1",name:"Miami Water Co",kind:"customer",contact:"Carlos Mendez",email:"carlos@miamiwater.test",phone:"(305) 555-0142",rep:"Dad",stage:"Active",balance:0,lifetimeSales:27600,billing:"8200 NW 30th St, Doral FL 33122",delivery:"8200 NW 30th St, Doral FL 33122",terms:"Net 30",notes:"Price $9.40 on 5-gal (agreed Jan 2026). Call the day before delivery.",prices:{"5-Gallon Bottle · 2 caps":9.4},qb:true},
   {id:"c2",name:"Sunshine Coolers",kind:"customer",contact:"Dana Whitfield",email:"dana@sunshinecoolers.test",phone:"(954) 555-0198",rep:"Dad",stage:"Active",balance:850,lifetimeSales:6420,billing:"1450 SW 12th Ave, Pompano Beach FL 33069",delivery:"Picks up",terms:"Card on pickup",notes:"Pays by card on pickup. White van.",prices:{},qb:true},
@@ -244,8 +323,13 @@ export const freeStock=(row:InventoryRow)=>row.onHand-row.committed;
 // ---- production steps, and protecting what the floor already did -------------------
 // A planned step becomes a record of what actually happened. Both live on the same object
 // so the plan and the truth can be compared rather than one silently replacing the other.
+// Both channels share the same two machines, which is the whole reason the plan has to be one
+// calendar rather than two. A step says which side of the business it is for so a day can be read
+// as "500 for Amazon and 500 for a wholesale order", not just "1,000 bottles".
+export type ProdSource="amazon"|"wholesale";
 export type ProdStep={
   id:string;type:"mold"|"assemble"|"palletize"|"ship";
+  source:ProdSource;
   target:string;                       // blank id for mould, sku id for the rest
   qty:number;                          // planned
   note?:string;linkedTo?:string;       // order or shipment
@@ -283,6 +367,17 @@ export function guardStepEdit(prev:ProdStep,next:Partial<ProdStep>):string|null{
   if(next.type&&next.type!==prev.type)return `${preamble} Changing the step type will not undo it. Continue?`;
   if(next.target&&next.target!==prev.target)return `${preamble} Changing what this step makes will not undo what was already produced. Continue?`;
   return `${preamble} Move or edit it anyway?`;
+}
+
+/**
+ * The floor logging its own work as it happens. Separate from reconcileStep on purpose: this is a
+ * first-hand record, so it carries no reconciled-by stamp. Recording less than planned leaves the
+ * step open, because the rest of those bottles still have to be made.
+ */
+export function recordStep(st:ProdStep,actualQty:number,by:string,scrap?:number):ProdStep{
+  const qty=Math.max(0,actualQty);
+  return {...st,actualQty:qty,done:qty>=st.qty,scrap:scrap??st.scrap,
+    doneAt:new Date().toISOString().slice(0,10),doneBy:by};
 }
 
 /** Owner reconciling the record: the floor made units and never recorded them. */
@@ -331,6 +426,83 @@ export function mouldDays(blankLoad:Record<string,number>,blanks:Blank[],machine
   }
   return {unitsBySize:bySize,daysBySize:days,days:Math.max(...Object.values(days),0)};
 }
+// ---- what a single day asks of the two machines ------------------------------------
+// mouldDays answers "how many shifts does this load need". A calendar has to answer the harder
+// question: does what has been PUT on this particular day fit? Only moulding occupies a machine —
+// assembly, palletizing and shipping happen on the bench and the dock and do not compete for it.
+//
+// The load a step represents is the plan until the floor has finished it, and what was actually
+// made once they have. A part-recorded step still owes the balance, so it keeps its planned figure:
+// 200 made of a planned 300 is still 300 bottles of machine time before that day is done.
+export const stepLoad=(st:ProdStep)=>st.done?(st.actualQty??st.qty):Math.max(st.qty,st.actualQty??0);
+
+export type MachineLoad={machine:Machine;units:number;capacity:number;over:number;bySource:Record<ProdSource,number>};
+
+/**
+ * Per-machine load for one day. A step is assigned to a machine by the SIZE of the blank it moulds,
+ * not by whatever machineId it was saved with — the 5-gallon line physically cannot run a 3-gallon
+ * mould, so the blank is the truth and a stale machineId must not be able to hide an overload.
+ */
+export function dayLoad(day:ProdDay,blanks:Blank[],machines:Machine[]):MachineLoad[]{
+  return machines.map(machine=>{
+    const bySource:Record<ProdSource,number>={amazon:0,wholesale:0};
+    let units=0;
+    for(const st of day.steps||[]){
+      if(st.type!=="mold")continue;
+      const blank=blanks.find(b=>b.id===st.target);
+      if(!blank||blank.size!==machine.makes)continue;
+      const n=stepLoad(st);
+      units+=n;bySource[st.source]=(bySource[st.source]||0)+n;
+    }
+    return {machine,units,capacity:machine.perShift,over:Math.max(0,units-machine.perShift),bySource};
+  });
+}
+
+/** Every day in the plan that asks more of a machine than a shift can deliver. */
+export const overCapacityDays=(days:ProdDay[],blanks:Blank[],machines:Machine[])=>
+  days.filter(d=>dayLoad(d,blanks,machines).some(l=>l.over>0));
+
+/**
+ * Month-level rollup for the header: what is scheduled, how it splits across the two lines, and
+ * how many shifts that load actually needs. Days scheduled and shifts needed are reported side by
+ * side deliberately — if the plan spreads 3,616 five-gallon bottles over six days, six days is not
+ * enough and the difference is a promised date about to be missed.
+ */
+export function planTotals(days:ProdDay[],blanks:Blank[],machines:Machine[]){
+  const blankLoad:Record<string,number>={};
+  const bySource:Record<ProdSource,number>={amazon:0,wholesale:0};
+  const daysUsed:Record<string,Set<string>>={};
+  for(const day of days){
+    for(const st of day.steps||[]){
+      if(st.type!=="mold")continue;
+      const blank=blanks.find(b=>b.id===st.target);if(!blank)continue;
+      const n=stepLoad(st);
+      blankLoad[st.target]=(blankLoad[st.target]||0)+n;
+      bySource[st.source]=(bySource[st.source]||0)+n;
+      const m=machines.find(x=>x.makes===blank.size);
+      if(m)(daysUsed[m.id]||=new Set()).add(day.date);
+    }
+  }
+  const need=mouldDays(blankLoad,blanks,machines);
+  return {
+    blankLoad,bySource,
+    unitsBySize:need.unitsBySize,
+    shiftsNeeded:need.daysBySize,
+    daysScheduled:Object.fromEntries(machines.map(m=>[m.id,(daysUsed[m.id]||new Set()).size])),
+    totalUnits:Object.values(blankLoad).reduce((a,b)=>a+b,0),
+    over:overCapacityDays(days,blanks,machines).map(d=>d.date),
+    steps:days.reduce((a,d)=>a+(d.steps||[]).length,0),
+  };
+}
+
+/**
+ * What a step is making, in words. A mould step names a blank; everything after it normally names a
+ * SKU — but wholesale buys the plain bottle, so a blank is a perfectly good target for a palletize or
+ * ship step too. Both lists are searched rather than assuming which one applies.
+ */
+export const stepTargetName=(st:ProdStep,blanks:Blank[],skus:Sku[])=>
+  blanks.find(b=>b.id===st.target)?.name||skus.find(x=>x.id===st.target)?.name||st.target;
+
 export const fmtDay=(d:Date)=>d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
 
 /** Fill in fields the old UI never saved so the new screens always have what they need. */
@@ -346,8 +518,15 @@ export function normalize(d:AppData):AppData{
     itemRates:(d.itemRates||[]).map(r=>({...r,kind:r.kind||"finished",unitsPerCase:r.unitsPerCase||2,floor:r.floor??Math.round(r.rate*(1-r.discountLimit/100)*100)/100,qcChecks:r.qcChecks||DEFAULT_QC})),
     inventory:(d.inventory||[]).map(i=>({...i,kind:i.kind||(/(preform|cap \(|caps \(|handle|carton|resin)/i.test(i.item)?"raw":"finished")})),
     maintenance:d.maintenance||[],purchaseOrders:d.purchaseOrders||[],
+    // The catalogue and the machines are the shop itself, so they are filled in rather than left
+    // undefined — Phase 1 defined them but nothing ever put them in the record, so every screen that
+    // asked for a blank or a machine got nothing.
+    blanks:d.blanks?.length?d.blanks:DEFAULT_BLANKS,skus:d.skus?.length?d.skus:DEFAULT_SKUS,
+    // ?? not ||: an owner who clears the whole plan means it, and must not have September seeded back.
+    // `source` is defaulted for safety only — every step written by this app sets it explicitly.
+    prodDays:(d.prodDays??SEPTEMBER_PLAN).map(day=>({...day,steps:(day.steps||[]).map(st=>({...st,source:st.source||"wholesale"}))})),
     calendar:d.calendar||[],notices:d.notices||[],activities:d.activities||[],roles:d.roles||seedData.roles,documents:d.documents||[],
-    settings:{...seedData.settings,...s,lines:s.lines||["Line 1"],shipMethods:(s.shipMethods&&s.shipMethods.some(m=>m.custom)?s.shipMethods:[...(s.shipMethods||DEFAULT_SHIP).filter(m=>!m.custom),DEFAULT_SHIP[DEFAULT_SHIP.length-1]]),discountApproval:s.discountApproval??5,monthlyExpenses:s.monthlyExpenses??0,cashOnHand:s.cashOnHand??0,quickBooks:{...seedData.settings.quickBooks,...(s.quickBooks||{})}}};
+    settings:{...seedData.settings,...s,lines:s.lines||["Line 1"],machines:s.machines?.length?s.machines:DEFAULT_MACHINES,shipMethods:(s.shipMethods&&s.shipMethods.some(m=>m.custom)?s.shipMethods:[...(s.shipMethods||DEFAULT_SHIP).filter(m=>!m.custom),DEFAULT_SHIP[DEFAULT_SHIP.length-1]]),discountApproval:s.discountApproval??5,monthlyExpenses:s.monthlyExpenses??0,cashOnHand:s.cashOnHand??0,quickBooks:{...seedData.settings.quickBooks,...(s.quickBooks||{})}}};
 }
 
 /** True when the record still holds sample customers (starter or demo data). */

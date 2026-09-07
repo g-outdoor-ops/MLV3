@@ -79,5 +79,101 @@ t("notes who reconciled it",r.reconciledBy==="Chris");
 const full=reconcile({id:"s2",qty:300,type:"mold"},300,"Chris");
 t("reconciling the full quantity completes it",full.done===true);
 
+// ---------------------------------------------------------------------------
+// Phase 2: the calendar. A day has to answer "does what is on this day fit on these two machines",
+// which is a different question from "how many shifts does the month need".
+
+const stepLoad=st=>st.done?(st.actualQty??st.qty):Math.max(st.qty,st.actualQty??0);
+const dayLoad=(day,blanks,machines)=>machines.map(machine=>{
+  const bySource={amazon:0,wholesale:0};let units=0;
+  for(const st of day.steps||[]){
+    if(st.type!=="mold")continue;
+    const b=blanks.find(x=>x.id===st.target);
+    if(!b||b.size!==machine.makes)continue;
+    const n=stepLoad(st);units+=n;bySource[st.source]+=n;
+  }
+  return {machine,units,capacity:machine.perShift,over:Math.max(0,units-machine.perShift),bySource};
+});
+
+console.log("\nA day is measured per machine, never pooled:");
+// The collision the calendar exists to catch: an Amazon shift and a wholesale order on one line.
+const clash={date:"2026-09-08",steps:[
+  {id:"a",type:"mold",source:"amazon",target:"b-s5",qty:500},
+  {id:"b",type:"mold",source:"wholesale",target:"b-r5",qty:500},
+  {id:"c",type:"mold",source:"amazon",target:"b-s3",qty:500}]};
+const loads=dayLoad(clash,BLANKS,MACHINES);
+const five=loads.find(l=>l.machine.makes==="5-gal"),three=loads.find(l=>l.machine.makes==="3-gal");
+t("both 5-gal steps land on the 5-gallon line",five.units===1000,`${five.units}`);
+t("the day is flagged over by 500",five.over===500,`${five.over}`);
+t("the 3-gallon line is counted separately and fits",three.units===500&&three.over===0,`${three.units}/${three.over}`);
+// Pooling would call this day fine: 1,500 bottles across 1,000 of "capacity" is only 50% over, and
+// the 3-gallon line has nothing spare to lend. The 5-gallon line is still double-booked.
+t("a 3-gallon machine cannot absorb 5-gallon work",three.bySource.amazon===500&&five.units>five.capacity);
+
+console.log("\nThe two channels are visible separately on the same day:");
+t("Amazon load on the 5-gallon line",five.bySource.amazon===500,`${five.bySource.amazon}`);
+t("wholesale load on the same line",five.bySource.wholesale===500,`${five.bySource.wholesale}`);
+t("the split adds up to the day's load",five.bySource.amazon+five.bySource.wholesale===five.units);
+
+console.log("\nA part-recorded step still owes the balance:");
+const partial={date:"d",steps:[{id:"p",type:"mold",source:"amazon",target:"b-s5",qty:500,actualQty:200}]};
+t("200 made of 500 still occupies 500",dayLoad(partial,BLANKS,MACHINES)[0].units===500);
+const finished={date:"d",steps:[{id:"p",type:"mold",source:"amazon",target:"b-s5",qty:500,actualQty:480,done:true}]};
+t("a finished step counts what was actually made",dayLoad(finished,BLANKS,MACHINES)[0].units===480);
+const nonMould={date:"d",steps:[{id:"p",type:"assemble",source:"amazon",target:"D5-T0WT-Q5XP",qty:2176}]};
+t("assembly does not occupy a machine",dayLoad(nonMould,BLANKS,MACHINES).every(l=>l.units===0));
+
+// ---------------------------------------------------------------------------
+// The seeded September plan, read out of the source it ships in. The plan is derived from the
+// tracker, so it has to keep reproducing the tracker's own totals.
+console.log("\nThe seeded September plan still matches the tracker:");
+const { readFileSync } = await import("node:fs");
+const src=readFileSync(new URL("../app/app-data.ts",import.meta.url),"utf8");
+const parse=(fn)=>[...src.matchAll(new RegExp(fn+'\\("([^"]+)","([^"]+)","([^"]+)",(\\d+),"([^"]+)"\\)',"g"))]
+  .map(m=>({id:m[1],date:m[2],target:m[3],qty:Number(m[4]),last:m[5]}));
+const moulds=parse("ms"),rest=parse("as");
+t("the plan is in the source",moulds.length>0&&rest.length>0,`${moulds.length} mould, ${rest.length} other`);
+
+const planBlank={};for(const st of moulds)planBlank[st.target]=(planBlank[st.target]||0)+st.qty;
+t("screw-top 5-gal scheduled = 2,176",planBlank["b-s5"]===2176,`${planBlank["b-s5"]}`);
+t("regular 5-gal scheduled = 1,440",planBlank["b-r5"]===1440,`${planBlank["b-r5"]}`);
+t("screw-top 3-gal scheduled = 1,320",planBlank["b-s3"]===1320,`${planBlank["b-s3"]}`);
+const planTotal=Object.values(planBlank).reduce((a,b)=>a+b,0);
+t("the month schedules all 4,936 bottles",planTotal===4936,`${planTotal}`);
+
+const assembled=rest.filter(x=>x.last==="assemble").map(x=>({skuId:x.target,qty:x.qty}));
+const planCaps=capsNeeded(assembled,SKUS);
+t("assembly consumes the tracker's 6,992 screw caps",planCaps["Screw cap"]===6992,`${planCaps["Screw cap"]}`);
+t("assembly consumes the tracker's 1,024 silicone caps",planCaps["Silicone cap"]===1024,`${planCaps["Silicone cap"]}`);
+const shipped=rest.filter(x=>x.last==="ship").reduce((a,x)=>a+x.qty,0);
+t("everything assembled is shipped",shipped===assembled.reduce((a,x)=>a+x.qty,0),`${shipped}`);
+
+console.log("\nNo scheduled day is over capacity as seeded:");
+const byDate={};
+for(const st of moulds)(byDate[st.date]||=[]).push({...st,type:"mold",source:"amazon"});
+const overs=Object.entries(byDate).filter(([date,steps])=>dayLoad({date,steps},BLANKS,MACHINES).some(l=>l.over>0));
+t("the Amazon plan fits the machines it is laid on",overs.length===0,overs.map(o=>o[0]).join(", "));
+t("moulding is spread over 8 five-gallon days",new Set(moulds.filter(x=>x.target!=="b-s3").map(x=>x.date)).size===8);
+t("and 3 three-gallon days",new Set(moulds.filter(x=>x.target==="b-s3").map(x=>x.date)).size===3);
+
+// ---------------------------------------------------------------------------
+console.log("\nRecording vs reconciling stay distinct:");
+const recordStep=(st,q,by)=>({...st,actualQty:Math.max(0,q),done:q>=st.qty,doneBy:by});
+const rec=recordStep({id:"s",qty:500,type:"mold"},480,"Warehouse");
+t("the floor's own record names the floor",rec.doneBy==="Warehouse"&&rec.reconciledBy===undefined);
+t("recording short of the plan leaves the step open",rec.done===false);
+const corrected=reconcile({...rec},500,"Chris");
+t("a correction keeps the original recorder",corrected.doneBy==="Warehouse",`${corrected.doneBy}`);
+t("and names who corrected it",corrected.reconciledBy==="Chris");
+
+// The screen must not be able to write an edit that skipped the guard.
+console.log("\nThe calendar cannot edit a started step silently:");
+const ui=readFileSync(new URL("../app/components/prodplan.tsx",import.meta.url),"utf8");
+const editBlock=ui.slice(ui.indexOf("onSave={(next,toDate)=>{"),ui.indexOf('"plan.step.edit"'));
+t("the edit path calls guardStepEdit before it writes",editBlock.includes("guardStepEdit("),"no guard in the edit path");
+t("the guard's question is answered in the app, not a browser dialog",!/window\.(confirm|prompt)/.test(ui));
+t("the owner has reconcileStep",ui.includes("reconcileStep("));
+t("the floor has its own recordStep",ui.includes("recordStep("));
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail?1:0);

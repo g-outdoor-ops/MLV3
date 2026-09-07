@@ -17,9 +17,11 @@ to invoicing or payments as touching real money.
 
 ## The state of play
 
-`main` is deployed. Last pushed commit: **`6626930`**.
+`main` is deployed. Last pushed commit: **`4b2ed00`**.
 
-There is **uncommitted work in the tree** for the order-flow rebuild — see "The job in progress" below.
+The order-flow rebuild described below is **committed** (`c331858` model + board, `e4035f0` the transitions).
+`4b2ed00` is Phase 1 of the production rebuild — model only, no screens. There is **uncommitted work in the
+tree** for Phase 2, the production plan calendar — see "The production rebuild" below.
 
 ### Shipped today (all on `main`)
 
@@ -62,7 +64,7 @@ Confirmed with the owner:
 - Quotes run **Quote → approved → invoice → paid**.
 - **Everyone sees every step** — one shared board, not role-filtered.
 
-### Done and in the tree (uncommitted)
+### The model and the board (`c331858`)
 
 - `app/app-data.ts` — new `STAGES`, plus `STAGE_NEW … STAGE_DONE` constants, `STAGE_OWNER` (whose move it
   is), `STAGE_NOTE`, and `canStartProduction(order)` which gates on deposit or paid.
@@ -74,11 +76,11 @@ Confirmed with the owner:
 - `app/globals.css` — `.flow-*` styles.
 - Date helpers `dueIso`, `dueDays`, `fmtDue` in `app-data.ts`; documents now store **ISO** dates; render
   sites format at display time; `invStatus` in `owner.tsx` uses `dueDays`.
-- `tests/stages.test.mjs` — assertions on the migration (now 44 in total, see below).
+- `tests/stages.test.mjs` — assertions on the migration (45 in total now, see below).
 
 The owner has seen the board and confirmed the column order is right.
 
-### Done and in the tree (uncommitted) — the stage transitions
+### The stage transitions (`e4035f0`)
 
 Every hardcoded stage number is gone from the components; `tests/stages.test.mjs` now fails the build if one
 comes back. The four moves are wired, each writing a single notice pointed at **Order flow**, the one board
@@ -118,7 +120,7 @@ Also fixed while in there, because the transitions could not be trusted without 
 - Demo orders now sit in the new stages directly rather than relying on the migration to place them.
 
 Verified by `npm run lint`, `npx tsc --noEmit -p .` (same four pre-existing `cloudflare:workers` errors),
-`npm run build`, and all five test suites — `tests/stages.test.mjs` is now 44 assertions. **Not verified in a
+`npm run build`, and all five test suites — `tests/stages.test.mjs` is now 45 assertions. **Not verified in a
 running app**: bringing it up locally needs an account to be created, so the flow has not been clicked through.
 
 ### Still open
@@ -134,10 +136,74 @@ running app**: bringing it up locally needs an account to be created, so the flo
 
 ---
 
+## The production rebuild
+
+### Phase 1 — the model (`4b2ed00`, committed)
+
+Blanks, SKUs, the two machines, `guardStepEdit` / `reconcileStep`, and the planning maths
+(`blanksNeeded`, `capsNeeded`, `mouldDays`). Read that commit message; it explains the shared blank and
+why capacity is never pooled. `tests/production.test.mjs` checks the model against the real catalogue.
+
+### Phase 2 — the mixed production calendar (in the tree, uncommitted)
+
+`app/components/prodplan.tsx` — **Production plan**, in the owner's Production group and on the floor's
+nav, routed from `page.tsx` the way Order flow is. `data.prodDays` holds `ProdDay[]`; each day holds
+`ProdStep[]`; every step carries `source: "amazon" | "wholesale"`, because both channels are made on the
+same two machines and that is the whole reason the plan has to be one calendar.
+
+- **Per-day capacity, per machine.** `dayLoad()` totals the day's mould steps against each machine (500
+  per shift) and splits the bar by source, so a day reads as "500 for Amazon, 500 for a wholesale order"
+  rather than "1,000 bottles". Only moulding occupies a machine. A day over either line is flagged red on
+  the card and counted in the header; the two lines are never pooled. `planTotals()` reports shifts needed
+  beside days scheduled — if those disagree, the month does not fit.
+- **A part-recorded step still owes its balance.** 200 made of a planned 300 counts as 300 of machine
+  time until it is finished, otherwise a half-done day looks free.
+- **Every edit runs `guardStepEdit` first.** Its question is answered in an in-page panel — "Keep it as it
+  is" / "Make the change anyway" — not a browser `confirm`, which cannot carry the sentence the guard
+  writes. Nothing is written until it is answered. A test asserts the edit path cannot skip it.
+- **`reconcileStep` for the owner, `recordStep` for the floor.** The floor logs its own work as it happens;
+  the owner corrects what the floor never recorded, and the record then shows both names. `recordStep` is
+  new in Phase 2 — Phase 1 had only the correction half, which left nothing to correct.
+
+Also fixed on the way through: **Phase 1's model was never wired into the record.** `normalize()` filled
+nothing for `blanks`, `skus` or `settings.machines`, so every one of them was `undefined` at runtime and
+any screen asking for a blank or a machine got nothing. They are filled from the `DEFAULT_*` constants now.
+
+### Where the September seed came from
+
+`SEPTEMBER_PLAN` in `app-data.ts`. **The tracker HTML is not in this repo and I could not find it on this
+machine** — what I seeded from is the tracker's per-SKU demand as Phase 1 captured and verified it in
+`tests/production.test.mjs` (2,176 / 1,320 / 704 / 288 / 448). The plan reproduces every headline figure —
+1,440 regular 5-gal blanks, 4,936 to mould, 6,992 screw caps, 1,024 silicone — and the tests now assert
+that against the seeded array itself, so it cannot drift.
+
+**The day-by-day layout is derived, not transcribed**: one shift per machine per working day, screw-top
+necks first so the single 5-gallon mould change lands over a weekend, then assembly, pallets, and the FBA
+shipment on the 23rd. If the real tracker has its own dates and milestones, point me at the file and I will
+replace the layout — the quantities will not change.
+
+Demo data adds wholesale steps on top (Palm Aqua's 500 plain 5-gallon bottles on the 8th, where the Amazon
+plan already fills that line) so the over-capacity warning has a real collision to show, plus one
+part-recorded step so the guard and reconcile have something true to protect. The live seed is Amazon only.
+
+### Still open on Phase 2
+
+- **Assembly and palletizing have no capacity model**, so those steps are placed but never checked. Only
+  moulding is constrained. If the bench is the real bottleneck on a heavy month, that needs modelling.
+- **Wholesale steps are added by hand.** Nothing generates them from an accepted order, so the calendar can
+  be out of step with what sales has promised. Deriving them from orders past the money gate is the
+  obvious next move, and it is a planning engine, not a screen.
+- **A month over capacity has no fix-it action** — the calendar names the problem and leaves the moving to
+  a person. That is deliberate for now; an auto-reflow that moves a customer's date is not something to
+  build before the owner asks for it.
+
+---
+
 ## Conventions that matter here
 
-- **Verify money maths with a test, not by eye.** `tests/money.test.mjs`, `tests/payments.test.mjs`,
-  `tests/stages.test.mjs`, `tests/authz.test.mjs`. Run with `node tests/<name>.test.mjs`. 55 assertions.
+- **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
+  `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
+  Run with `node tests/<name>.test.mjs`. 133 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.
