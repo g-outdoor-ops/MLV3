@@ -17,11 +17,12 @@ to invoicing or payments as touching real money.
 
 ## The state of play
 
-`main` is deployed. Last pushed commit: **`4b2ed00`**.
+`main` is deployed. Last **pushed** commit: **`4b2ed00`**. `main` is one commit ahead of the remote —
+`8c0bf42` is committed locally and **not pushed**, so it is not live yet.
 
-The order-flow rebuild described below is **committed** (`c331858` model + board, `e4035f0` the transitions).
-`4b2ed00` is Phase 1 of the production rebuild — model only, no screens. There is **uncommitted work in the
-tree** for Phase 2, the production plan calendar — see "The production rebuild" below.
+The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
+The production rebuild is `4b2ed00` (Phase 1, model only) and `8c0bf42` (Phase 2, the calendar) — see
+"The production rebuild" below.
 
 ### Shipped today (all on `main`)
 
@@ -144,7 +145,7 @@ Blanks, SKUs, the two machines, `guardStepEdit` / `reconcileStep`, and the plann
 (`blanksNeeded`, `capsNeeded`, `mouldDays`). Read that commit message; it explains the shared blank and
 why capacity is never pooled. `tests/production.test.mjs` checks the model against the real catalogue.
 
-### Phase 2 — the mixed production calendar (in the tree, uncommitted)
+### Phase 2 — the mixed production calendar (`8c0bf42`, committed, not pushed)
 
 `app/components/prodplan.tsx` — **Production plan**, in the owner's Production group and on the floor's
 nav, routed from `page.tsx` the way Order flow is. `data.prodDays` holds `ProdDay[]`; each day holds
