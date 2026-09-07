@@ -12,9 +12,9 @@
 //  · Nothing the floor has already made may be edited away silently. Every edit runs guardStepEdit
 //    first and, when it has something to say, the person has to answer it before the change lands.
 import { useState } from "react";
-import { DEFAULT_BLANKS, DEFAULT_MACHINES, DEFAULT_SKUS, addSteps, dayLoad, fmtDue, guardStepEdit, orderNeeds, ordersToPlan, planOrder, planTotals, reconcileStep, recordStep, stepStarted, stepTargetName, todayIso,
+import { DEFAULT_BLANKS, DEFAULT_MACHINES, DEFAULT_SKUS, addSteps, dayLoad, fmtDue, guardStepEdit, orderNeeds, ordersToPlan, planOrder, planTotals, reconcileStep, recordStep, runFromSteps, runSteps, stepProgress, stepTargetName, todayIso,
   type AppData, type MachineLoad, type OrderRecord, type ProdDay, type ProdSource, type ProdStep } from "../app-data";
-import { Kpi, num, uid, useApp } from "./store";
+import { Kpi, nextId, num, uid, useApp } from "./store";
 
 export const PRODUCTION_PLAN="Production plan";
 
@@ -25,7 +25,7 @@ const monthOf=(iso:string)=>iso.slice(0,7);
 const monthKey=(y:number,m:number)=>`${y}-${String(m+1).padStart(2,"0")}`;
 
 export function ProductionPlanView(){
-  const {data,commit,notify,role,user}=useApp();
+  const {data,commit,notify,openRecord,role,user}=useApp();
   const owner=role==="owner";
   const blanks=data.blanks?.length?data.blanks:DEFAULT_BLANKS;
   const skus=data.skus?.length?data.skus:DEFAULT_SKUS;
@@ -50,7 +50,9 @@ export function ProductionPlanView(){
   const [pending,setPending]=useState<{message:string;confirm:()=>void}|null>(null);
 
   const days=all.filter(d=>monthOf(d.date)===ym);
-  const totals=planTotals(days,blanks,machines);
+  const runs=data.workOrders||[];
+  const everyStep=all.flatMap(d=>d.steps||[]);
+  const totals=planTotals(days,blanks,machines,runs);
   const [y,m]=ym.split("-").map(Number);
   const monthLabel=new Date(Date.UTC(y,m-1,1)).toLocaleDateString("en-US",{month:"long",year:"numeric",timeZone:"UTC"});
   const stepMonth=(mm:number)=>{const d=new Date(Date.UTC(y,m-1+mm,1));setYm(monthKey(d.getUTCFullYear(),d.getUTCMonth()))};
@@ -65,6 +67,23 @@ export function ProductionPlanView(){
     const has=without.some(d=>d.date===to);
     const next=has?without.map(d=>d.date===to?{...d,steps:[...d.steps,step]}:d):[...without,{date:to,steps:[step]}];
     return next.filter(d=>d.steps.length||d.forWhat||d.milestone).sort((a,b)=>a.date.localeCompare(b.date));
+  };
+
+  /**
+   * Send a step to the floor as a work order. From here the run owns the numbers: the plan shows what
+   * the floor recorded instead of offering a second box to type it into.
+   */
+  const sendToFloor=(st:ProdStep,day:ProdDay)=>{
+    const covered=runSteps(st,all);
+    const id=nextId("WO-",runs.map(w=>w.id),116);
+    const work=runFromSteps(covered,data,id,day.date);
+    if(!work){notify("Only moulding runs on a machine — this step has no run to raise",PRODUCTION_PLAN,true);return}
+    const ids=new Set(covered.map(c=>c.id));
+    commit(v=>({...v,
+      workOrders:[...(v.workOrders||[]),work],
+      prodDays:(v.prodDays||[]).map(d=>({...d,steps:(d.steps||[]).map(x=>ids.has(x.id)?{...x,workOrderId:id}:x)})),
+    }),"plan.run",`${id} raised from the plan · ${work.quantity}`);
+    notify(`${id} sent to the floor — ${num(work.quantity)} on ${work.line}${covered.length>1?` over ${covered.length} days`:""}`,PRODUCTION_PLAN);
   };
 
   const record=(st:ProdStep,made:number,scrap:number)=>{
@@ -130,7 +149,7 @@ export function ProductionPlanView(){
     }}/>}
 
     {days.length?days.map(day=>{
-      const loads=dayLoad(day,blanks,machines);
+      const loads=dayLoad(day,blanks,machines,runs,everyStep);
       const over=loads.some(l=>l.over>0);
       const shown=day.steps.filter(s=>filter==="all"||s.source===filter);
       const isToday=day.date===todayIso();
@@ -153,32 +172,44 @@ export function ProductionPlanView(){
 
         <div className="plan-steps">
           {shown.length?shown.map(st=>{
-            const started=stepStarted(st);
-            return <div key={st.id} className={`plan-step${st.done?" done":""}`}>
+            // One reading of what was made, from the run when there is one. The step's own fields are
+            // not consulted while a run owns it — that split is what let the two screens disagree.
+            const progress=stepProgress(st,runs,everyStep);
+            const run=st.workOrderId?runs.find(w=>w.id===st.workOrderId):undefined;
+            const started=progress.made>0||progress.done;
+            return <div key={st.id} className={`plan-step${progress.done?" done":""}`}>
               <div className="plan-step-main">
                 <span className={`plan-chip type-${st.type}`}>{TYPE_LABEL[st.type]}</span>
                 <span className={`plan-chip src-${st.source}`}>{SOURCE_LABEL[st.source]}</span>
                 <b>{stepTargetName(st,blanks,skus)}</b>
-                <span className="plan-qty">{num(st.qty)} planned{st.actualQty!=null&&` · ${num(st.actualQty)} made`}{st.scrap?` · ${num(st.scrap)} scrap`:""}</span>
-                <span className={`plan-state${st.done?" done":started?" part":""}`}>{st.done?"Done":started?"Part made":"Planned"}</span>
+                <span className="plan-qty">{num(st.qty)} planned{progress.made>0&&` · ${num(progress.made)} made`}{progress.scrap?` · ${num(progress.scrap)} scrap`:""}</span>
+                <span className={`plan-state${progress.done?" done":started?" part":""}`}>{progress.done?"Done":started?"Part made":run?"On the floor":"Planned"}</span>
               </div>
-              {(st.note||st.linkedTo||st.doneBy)&&<p className="plan-step-note">
+              {(st.note||st.linkedTo||progress.by||run)&&<p className="plan-step-note">
                 {st.linkedTo&&<em>{st.linkedTo}</em>}{st.note}
-                {st.doneBy&&<i>{st.reconciledBy?`Recorded by ${st.doneBy}, corrected by ${st.reconciledBy}`:`Recorded by ${st.doneBy}`}{st.doneAt?` · ${fmtDue(st.doneAt)}`:""}</i>}
+                {run&&<i>Run {run.id} · {run.line} · {run.status.toLowerCase()} · {num(run.good)} of {num(run.quantity)} made{run.scrap?` · ${num(run.scrap)} scrap on the run`:""}</i>}
+                {progress.by&&<i>{st.reconciledBy?`Recorded by ${progress.by}, corrected by ${st.reconciledBy}`:`Recorded by ${progress.by}`}{progress.at?` · ${fmtDue(progress.at)}`:""}</i>}
               </p>}
 
               <div className="plan-step-actions">
-                {!st.done&&<button className="secondary" onClick={()=>{setRecording(recording===st.id?null:st.id);setEditing(null);setReconciling(null)}}>{recording===st.id?"Cancel":"Record made"}</button>}
+                {/* A step with a run is recorded on the floor, against that run. Offering a second box
+                    here is exactly how the plan and the run came to hold different numbers. */}
+                {run
+                  ?<button className="secondary" onClick={()=>openRecord(run.id)}>Open {run.id}</button>
+                  :<>
+                    {!progress.done&&<button className="secondary" onClick={()=>{setRecording(recording===st.id?null:st.id);setEditing(null);setReconciling(null)}}>{recording===st.id?"Cancel":"Record made"}</button>}
+                    {owner&&st.type==="mold"&&!started&&<button className="primary" onClick={()=>sendToFloor(st,day)}>Send to the floor</button>}
+                  </>}
                 {owner&&<button className="secondary" onClick={()=>{setEditing(editing===st.id?null:st.id);setRecording(null);setReconciling(null)}}>{editing===st.id?"Cancel":"Edit"}</button>}
-                {owner&&<button className="secondary" onClick={()=>{setReconciling(reconciling===st.id?null:st.id);setEditing(null);setRecording(null)}}>{reconciling===st.id?"Cancel":"Reconcile"}</button>}
-                {owner&&!started&&<button className="link-button" onClick={()=>writeDays(ds=>ds.map(d=>({...d,steps:d.steps.filter(x=>x.id!==st.id)})),"plan.step.remove",`${st.id} removed`)}>Remove</button>}
+                {owner&&!run&&<button className="secondary" onClick={()=>{setReconciling(reconciling===st.id?null:st.id);setEditing(null);setRecording(null)}}>{reconciling===st.id?"Cancel":"Reconcile"}</button>}
+                {owner&&!started&&!run&&<button className="link-button" onClick={()=>writeDays(ds=>ds.map(d=>({...d,steps:d.steps.filter(x=>x.id!==st.id)})),"plan.step.remove",`${st.id} removed`)}>Remove</button>}
               </div>
 
-              {recording===st.id&&<Amount label="How many were actually made?" initial={st.actualQty??st.qty} extra="scrap"
+              {recording===st.id&&<Amount label="How many were actually made?" initial={progress.made||st.qty} extra="scrap"
                 confirm="Save what was made" onCancel={()=>setRecording(null)} onSave={(n,scrap)=>record(st,n,scrap)}/>}
 
               {reconciling===st.id&&<Amount label={`True quantity made — corrects the record, and notes that you were the one who did it.`}
-                initial={st.actualQty??st.qty} confirm="Correct the record" onCancel={()=>setReconciling(null)} onSave={n=>reconcile(st,n)}/>}
+                initial={progress.made||st.qty} confirm="Correct the record" onCancel={()=>setReconciling(null)} onSave={n=>reconcile(st,n)}/>}
 
               {editing===st.id&&<EditStep step={st} day={day}
                 onCancel={()=>setEditing(null)}

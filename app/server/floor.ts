@@ -18,7 +18,7 @@
 //     leaked link cannot reprice the catalogue or delete a customer, because there is no way to ask.
 // The .ts extension is deliberate: it is what Node's own resolver wants, so this module can be loaded
 // straight from tests/warehouse-link.test.mjs and checked as it ships rather than as a copy of itself.
-import { newFloorToken, recordStep, type AppData, type Blank, type Machine, type ProdDay, type ProdStep, type Sku, type WorkOrder } from "../app-data.ts";
+import { newFloorToken, recordStep, stepProgress, type AppData, type Blank, type Machine, type ProdDay, type ProdStep, type Sku, type WorkOrder } from "../app-data.ts";
 
 /** Days either side of today the tablet is shown. Old work stays visible long enough to be recorded. */
 const WINDOW_BACK=10, WINDOW_FORWARD=28;
@@ -56,9 +56,16 @@ export function floorView(data:AppData):FloorView{
   const from=shift(-WINDOW_BACK),to=shift(WINDOW_FORWARD);
   const days=(data.prodDays||[]).filter(d=>d.date>=from&&d.date<=to)
     .map(d=>({date:d.date,forWhat:d.forWhat,milestone:d.milestone,
-      steps:(d.steps||[]).map(s=>({id:s.id,type:s.type,source:s.source,target:s.target,qty:s.qty,note:s.note,linkedTo:s.linkedTo,
-        machineId:s.machineId,done:s.done,actualQty:s.actualQty,scrap:s.scrap,doneAt:s.doneAt,doneBy:s.doneBy,
-        reconciledBy:s.reconciledBy,reconciledAt:s.reconciledAt}))}));
+      steps:(d.steps||[]).map(s=>{
+        // What was made is read the same way here as everywhere else — from the run when a run owns the
+        // step. The tablet is the place this mattered most: it was showing the plan's copy of the number
+        // beside the run's, with a button under each.
+        const p=stepProgress(s,data.workOrders||[],(data.prodDays||[]).flatMap(x=>x.steps||[]));
+        return {id:s.id,type:s.type,source:s.source,target:s.target,qty:s.qty,note:s.note,linkedTo:s.linkedTo,
+          machineId:s.machineId,workOrderId:s.workOrderId,
+          done:p.done,actualQty:p.made||undefined,scrap:p.scrap||undefined,doneAt:p.at,doneBy:p.by,
+          reconciledBy:s.reconciledBy,reconciledAt:s.reconciledAt};
+      })}));
   const workOrders=(data.workOrders||[]).filter(w=>w.status!=="Done")
     .map(w=>({id:w.id,orderId:w.orderId,item:w.item,quantity:w.quantity,good:w.good,scrap:w.scrap,
       status:w.status,line:w.line||"Line 1",date:w.date,purpose:w.purpose,qcNote:w.qcNote}));
@@ -104,6 +111,9 @@ export function applyFloorAction(data:AppData,action:FloorAction,now=new Date().
     const day=(data.prodDays||[]).find(d=>(d.steps||[]).some(s=>s.id===action.stepId));
     const step=day&&day.steps.find(s=>s.id===action.stepId);
     if(!step)return {error:"That step is no longer on the plan"};
+    // A step being run has one record and it is the run's. Taking a number here as well is precisely
+    // how the schedule and the run ended up disagreeing, so it is refused rather than merged.
+    if(step.workOrderId)return {error:`Record this on run ${step.workOrderId} — it is the same work`};
     const made=num(action.made),scrap=num(action.scrap);
     const next=recordStep(step,made,by,scrap);
     return {

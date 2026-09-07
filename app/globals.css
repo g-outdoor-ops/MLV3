@@ -237,3 +237,5 @@
   font-size:1.4rem;font-weight:800;text-align:center}
 .floor-link-enter-actions{display:flex;gap:10px}
 .floor-link-enter-actions button{flex:1;min-height:52px;border-radius:10px}
+.floor-link-runref{margin:9px 0 0;color:#5d6b62;font-weight:700;font-size:.85rem;
+  background:#f1f4f2;border-radius:9px;padding:10px 12px}

@@ -59,7 +59,10 @@ export type Sku={
 // Two machines, one per bottle size, running in parallel. 500 bottles each on a six-hour
 // shift. They do not share capacity: a heavy 5-gallon week cannot borrow the 3-gallon
 // machine, which is exactly the constraint a plan has to respect.
-export type Machine={id:string;name:string;makes:"3-gal"|"5-gal";perShift:number};
+// `line` is the name the shop floor screens use for this machine. Machines and lines were two separate
+// vocabularies for one physical thing, which is how a run raised against a machine could end up on a
+// line nobody was looking at.
+export type Machine={id:string;name:string;makes:"3-gal"|"5-gal";perShift:number;line?:string};
 // The real catalogue. Four blanks, six Amazon SKUs, and the plain bottles wholesale buys.
 export const DEFAULT_BLANKS:Blank[]=[
   {id:"b-s5",name:"Screw-top 5-gal",size:"5-gal",neck:"screw"},
@@ -85,8 +88,8 @@ export const DEFAULT_SKUS:Sku[]=[
 ];
 
 export const DEFAULT_MACHINES:Machine[]=[
-  {id:"m5",name:"5-gallon line",makes:"5-gal",perShift:500},
-  {id:"m3",name:"3-gallon line",makes:"3-gal",perShift:500},
+  {id:"m5",name:"5-gallon line",makes:"5-gal",perShift:500,line:"Line 1"},
+  {id:"m3",name:"3-gallon line",makes:"3-gal",perShift:500,line:"Line 2"},
 ];
 // ---- the September plan ------------------------------------------------------------
 // The month the tracker covers, as production steps rather than a spreadsheet. Quantities are the
@@ -163,7 +166,9 @@ const DEMO_WHOLESALE:{date:string;step:ProdStep}[]=[
   {date:"2026-09-14",step:{id:"pd-w4",type:"ship",source:"wholesale",target:"b-r5",qty:500,linkedTo:"SO-1187",note:"LTL to Palm Aqua"}},
 ];
 export const demoPlan=():ProdDay[]=>buildPlan([
-  ...SEPTEMBER_STEPS.map(e=>({...e,step:{...e.step,...(e.step.id==="ps-m1"?{actualQty:200,scrap:4,doneAt:"2026-09-07",doneBy:"Warehouse"}:{})}})),
+  // ps-m1 is being run as WO-121 — the plan shows what the floor recorded against that run rather than
+  // keeping a second figure of its own. ps-m2 is the next day of the same run.
+  ...SEPTEMBER_STEPS.map(e=>({...e,step:{...e.step,...(e.step.id==="ps-m1"||e.step.id==="ps-m2"?{workOrderId:"WO-121"}:{})}})),
   ...DEMO_WHOLESALE],DAY_LABELS);
 
 export type ShipMethod={id:string;name:string;sub:string;rate:number;perCase?:number;custom?:boolean};
@@ -244,6 +249,9 @@ export const demoData:AppData={
   {id:"WO-118",orderId:"SO-1189",item:"5-Gallon Bottle · 2 caps",quantity:600,good:418,scrap:9,packed:0,date:iso(1),status:"Running",purpose:"Miami Water Co order + stock",line:"Line 1",days:2,qc:DEFAULT_QC.map((l,i)=>({label:l,result:[true,true,null,true,true,null][i]})),qcNote:"Base looked a touch soft on rack 3 — Luis trimmed lamp zone 5 by 3%."},
   {id:"WO-119",item:"3-Gallon Bottle · 2 caps",quantity:500,good:0,scrap:0,packed:0,date:iso(2),status:"Scheduled",purpose:"Build stock",line:"Line 2",days:2},
   {id:"WO-120",item:"5-Gallon Bottle · no cap",quantity:400,good:0,scrap:0,packed:0,date:iso(3),status:"Scheduled",purpose:"Build stock",line:"Line 1",days:1},
+  // Raised from the September plan: it carries the 7th and 8th of the screw-top 5-gal run, and it is
+  // the only record of what those two days made.
+  {id:"WO-121",item:"5-Gallon Bottle · 2 caps",quantity:1000,good:620,scrap:14,packed:0,date:"2026-09-07",status:"Running",purpose:"Amazon replenishment",line:"Line 1",days:2},
  ],
  calendar:[],
  notices:[
@@ -341,6 +349,10 @@ export type ProdStep={
   qty:number;                          // planned
   note?:string;linkedTo?:string;       // order or shipment
   machineId?:string;
+  // The run carrying this step out, once one has been raised. While it is set, the run is the record of
+  // what was made and the fields below are NOT read — see stepProgress. Two places to type the same
+  // number is how the plan and the floor came to disagree.
+  workOrderId?:string;
   // filled in by the floor, or by the owner reconciling after the fact
   done?:boolean;actualQty?:number;scrap?:number;doneAt?:string;doneBy?:string;
   reconciledBy?:string;reconciledAt?:string;
@@ -441,7 +453,43 @@ export function mouldDays(blankLoad:Record<string,number>,blanks:Blank[],machine
 // The load a step represents is the plan until the floor has finished it, and what was actually
 // made once they have. A part-recorded step still owes the balance, so it keeps its planned figure:
 // 200 made of a planned 300 is still 300 bottles of machine time before that day is done.
-export const stepLoad=(st:ProdStep)=>st.done?(st.actualQty??st.qty):Math.max(st.qty,st.actualQty??0);
+/**
+ * What a step has actually produced.
+ *
+ * A step and the run carrying it out were two separate records of the same bottles: the plan stored
+ * actualQty, the work order stored good, nothing connected them, and whichever screen you typed into
+ * was the only one that knew. So once a step has a run, THE RUN IS THE RECORD and this reads it — the
+ * step's own fields are ignored rather than kept in step, because two copies of a number are two
+ * numbers.
+ *
+ * A run usually spans several days, and each of those days is a step. The run's output fills them in
+ * date order, which is how a multi-day run actually progresses: day one is finished before day two
+ * starts. Scrap is not divided up — nobody knows which shift it happened on — so it stays reported
+ * against the run.
+ */
+export type StepProgress={made:number;scrap:number;done:boolean;by?:string;at?:string;runId?:string;runScrap:number};
+export function stepProgress(st:ProdStep,workOrders:WorkOrder[]=[],allSteps:ProdStep[]=[]):StepProgress{
+  const run=st.workOrderId?workOrders.find(w=>w.id===st.workOrderId):undefined;
+  if(!run)return {made:st.actualQty??(st.done?st.qty:0),scrap:st.scrap??0,done:!!st.done,by:st.doneBy,at:st.doneAt,runScrap:0};
+  // Everything this run covers, in the order it will be worked through.
+  const covered=allSteps.filter(x=>x.workOrderId===run.id).sort((a,b)=>(a.id>b.id?1:-1));
+  let left=run.good;
+  let made=0;
+  for(const x of covered){
+    const take=Math.min(x.qty,Math.max(0,left));
+    if(x.id===st.id){made=take;break}
+    left-=take;
+  }
+  return {made,scrap:0,done:run.status==="Done"?true:made>=st.qty,by:undefined,at:undefined,runId:run.id,runScrap:run.scrap};
+}
+
+/** True when a step's record is owned by a run, so the plan must not offer to type the number again. */
+export const stepIsRun=(st:ProdStep)=>!!st.workOrderId;
+
+export const stepLoad=(st:ProdStep,workOrders:WorkOrder[]=[],allSteps:ProdStep[]=[])=>{
+  const p=stepProgress(st,workOrders,allSteps);
+  return p.done?(p.made||st.qty):Math.max(st.qty,p.made);
+};
 
 export type MachineLoad={machine:Machine;units:number;capacity:number;over:number;bySource:Record<ProdSource,number>};
 
@@ -450,7 +498,7 @@ export type MachineLoad={machine:Machine;units:number;capacity:number;over:numbe
  * not by whatever machineId it was saved with — the 5-gallon line physically cannot run a 3-gallon
  * mould, so the blank is the truth and a stale machineId must not be able to hide an overload.
  */
-export function dayLoad(day:ProdDay,blanks:Blank[],machines:Machine[]):MachineLoad[]{
+export function dayLoad(day:ProdDay,blanks:Blank[],machines:Machine[],workOrders:WorkOrder[]=[],allSteps:ProdStep[]=[]):MachineLoad[]{
   return machines.map(machine=>{
     const bySource:Record<ProdSource,number>={amazon:0,wholesale:0};
     let units=0;
@@ -458,7 +506,7 @@ export function dayLoad(day:ProdDay,blanks:Blank[],machines:Machine[]):MachineLo
       if(st.type!=="mold")continue;
       const blank=blanks.find(b=>b.id===st.target);
       if(!blank||blank.size!==machine.makes)continue;
-      const n=stepLoad(st);
+      const n=stepLoad(st,workOrders,allSteps);
       units+=n;bySource[st.source]=(bySource[st.source]||0)+n;
     }
     return {machine,units,capacity:machine.perShift,over:Math.max(0,units-machine.perShift),bySource};
@@ -466,8 +514,10 @@ export function dayLoad(day:ProdDay,blanks:Blank[],machines:Machine[]):MachineLo
 }
 
 /** Every day in the plan that asks more of a machine than a shift can deliver. */
-export const overCapacityDays=(days:ProdDay[],blanks:Blank[],machines:Machine[])=>
-  days.filter(d=>dayLoad(d,blanks,machines).some(l=>l.over>0));
+export const overCapacityDays=(days:ProdDay[],blanks:Blank[],machines:Machine[],workOrders:WorkOrder[]=[])=>{
+  const all=days.flatMap(d=>d.steps||[]);
+  return days.filter(d=>dayLoad(d,blanks,machines,workOrders,all).some(l=>l.over>0));
+};
 
 /**
  * Month-level rollup for the header: what is scheduled, how it splits across the two lines, and
@@ -475,15 +525,16 @@ export const overCapacityDays=(days:ProdDay[],blanks:Blank[],machines:Machine[])
  * side deliberately — if the plan spreads 3,616 five-gallon bottles over six days, six days is not
  * enough and the difference is a promised date about to be missed.
  */
-export function planTotals(days:ProdDay[],blanks:Blank[],machines:Machine[]){
+export function planTotals(days:ProdDay[],blanks:Blank[],machines:Machine[],workOrders:WorkOrder[]=[]){
   const blankLoad:Record<string,number>={};
   const bySource:Record<ProdSource,number>={amazon:0,wholesale:0};
   const daysUsed:Record<string,Set<string>>={};
+  const all=days.flatMap(d=>d.steps||[]);
   for(const day of days){
     for(const st of day.steps||[]){
       if(st.type!=="mold")continue;
       const blank=blanks.find(b=>b.id===st.target);if(!blank)continue;
-      const n=stepLoad(st);
+      const n=stepLoad(st,workOrders,all);
       blankLoad[st.target]=(blankLoad[st.target]||0)+n;
       bySource[st.source]=(bySource[st.source]||0)+n;
       const m=machines.find(x=>x.makes===blank.size);
@@ -497,7 +548,7 @@ export function planTotals(days:ProdDay[],blanks:Blank[],machines:Machine[]){
     shiftsNeeded:need.daysBySize,
     daysScheduled:Object.fromEntries(machines.map(m=>[m.id,(daysUsed[m.id]||new Set()).size])),
     totalUnits:Object.values(blankLoad).reduce((a,b)=>a+b,0),
-    over:overCapacityDays(days,blanks,machines).map(d=>d.date),
+    over:overCapacityDays(days,blanks,machines,workOrders).map(d=>d.date),
     steps:days.reduce((a,d)=>a+(d.steps||[]).length,0),
   };
 }
@@ -627,6 +678,58 @@ export function planOrder(o:OrderRecord,data:AppData,from?:string){
   const due=dueIso(o.due);
   const daysLate=due?Math.round((new Date(ship+"T12:00:00Z").getTime()-new Date(due+"T12:00:00Z").getTime())/864e5):null;
   return {entries,need,finish:ship,daysLate:daysLate!=null&&daysLate>0?daysLate:null};
+}
+
+/**
+ * The steps one run would cover: the one chosen, plus the days that follow it making the same thing for
+ * the same customer. A run in this shop is a continuous stretch on one machine, so it stops at the first
+ * real gap — a weekend is not a gap, a fortnight is a different batch.
+ */
+export function runSteps(step:ProdStep,days:ProdDay[]):ProdStep[]{
+  if(step.type!=="mold")return [step];
+  const dated=days.flatMap(d=>(d.steps||[]).map(s=>({date:d.date,step:s}))).sort((a,b)=>a.date.localeCompare(b.date));
+  const start=dated.findIndex(x=>x.step.id===step.id);
+  if(start<0)return [step];
+  const out=[dated[start].step];
+  let previous=dated[start].date;
+  for(const {date,step:next} of dated.slice(start+1)){
+    if(next.type!=="mold"||next.target!==step.target||next.source!==step.source||next.linkedTo!==step.linkedTo)continue;
+    if(next.workOrderId||stepProgress(next).made>0)break;      // already run, or already recorded
+    const gap=Math.round((new Date(date+"T12:00:00Z").getTime()-new Date(previous+"T12:00:00Z").getTime())/864e5);
+    if(gap>4)break;                                            // a fortnight later is a different batch
+    out.push(next);previous=date;
+  }
+  return out;
+}
+
+/**
+ * A run raised from the plan, so what the floor sees is the work the calendar asked for rather than a
+ * second job typed in beside it. The item is looked up through the blank the step moulds, because the
+ * floor screens key their quality checks and their material off the catalogue item, not off the blank.
+ */
+export function runFromSteps(steps:ProdStep[],data:AppData,id:string,startDate:string):WorkOrder|null{
+  const first=steps[0];
+  if(!first||first.type!=="mold")return null;
+  const blanks=data.blanks?.length?data.blanks:DEFAULT_BLANKS;
+  const machines=data.settings.machines?.length?data.settings.machines:DEFAULT_MACHINES;
+  const blank=blanks.find(b=>b.id===first.target);
+  const machine=blank&&machines.find(m=>m.makes===blank.size);
+  const order=first.linkedTo?data.orders.find(o=>o.id===first.linkedTo):undefined;
+  // Prefer the item the customer actually ordered; fall back to any catalogue item moulded from this
+  // blank; fall back again to the blank's own name so the run is still raised rather than refused.
+  const fromOrder=order&&orderLines(order,data.itemRates).map(l=>l.item)
+    .find(item=>data.itemRates.find(r=>r.item===item)?.blankId===first.target);
+  const item=fromOrder||data.itemRates.find(r=>r.blankId===first.target)?.item||blank?.name||first.target;
+  const customer=order?data.customers.find(c=>c.id===order.customerId)?.name:"";
+  return {
+    id,orderId:first.linkedTo,item,
+    quantity:steps.reduce((a,s)=>a+s.qty,0),
+    good:0,scrap:0,packed:0,
+    date:startDate,status:"Scheduled",
+    purpose:order?`${customer||"Customer"} order`:"Build stock",
+    line:machine?.line||data.settings.lines?.[0]||"Line 1",
+    days:new Set(steps.map(s=>s.id)).size,
+  };
 }
 
 /** The steps already on the plan for an order. Used to keep planning it twice from being possible. */

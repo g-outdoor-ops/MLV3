@@ -67,7 +67,8 @@ const withSecret=normalize({...data,customers:data.customers.map(c=>({...c,secre
 t("a new field on a record does not leak by default",!JSON.stringify(floorView(withSecret)).includes("do not share"));
 
 console.log("\nWhat it can change — and everything it cannot:");
-const step=data.prodDays.flatMap(d=>d.steps).find(s=>!s.done);
+// A step nobody has raised a run for: those are the ones the tablet records directly.
+const step=data.prodDays.flatMap(d=>d.steps).find(s=>!s.done&&!s.workOrderId);
 const wo=data.workOrders.find(w=>w.status!=="Done"&&w.good<w.quantity);
 const finishedRun=data.workOrders.find(w=>w.status!=="Done"&&w.good>=w.quantity);
 const untouched=(before,after)=>["customers","documents","itemRates","roles","orders","settings","skus","blanks"]
@@ -103,6 +104,18 @@ t("a work order that is not open is refused",!!applyFloorAction(data,{op:"wo.pro
 // Numbers arrive from a page anyone can rewrite, so they are cleaned rather than trusted.
 t("a negative count cannot run the record backwards",applyFloorAction(data,{op:"wo.progress",woId:wo.id,good:-500,scrap:-5}).error==="Nothing to add");
 t("a nonsense count is refused, not stored",!!applyFloorAction(data,{op:"wo.progress",woId:wo.id,good:"lots"}).error);
+
+console.log("\nThe tablet cannot count the same bottles twice:");
+// The link used to show the run AND the plan's copy of the same work, each with its own button.
+const onRun=data.prodDays.flatMap(d=>d.steps).find(s=>s.workOrderId);
+t("a step being run is refused here",!!applyFloorAction(data,{op:"step.record",stepId:onRun.id,made:400}).error);
+t("and it says where the number goes instead",
+  applyFloorAction(data,{op:"step.record",stepId:onRun.id,made:400}).error.includes(onRun.workOrderId));
+const shown=floorView(data).days.flatMap(d=>d.steps).find(s=>s.id===onRun.id);
+t("the tablet shows the run's figure, not the plan's",shown.actualQty===500,`${shown.actualQty}`);
+t("and names the run so the operator knows where to look",shown.workOrderId===onRun.workOrderId);
+const free=data.prodDays.flatMap(d=>d.steps).find(s=>!s.workOrderId&&!s.done);
+t("a step with no run is still recordable from the tablet",!applyFloorAction(data,{op:"step.record",stepId:free.id,made:10}).error);
 
 console.log("\nThe audit says the record came from the link, not from a person who signed in:");
 t("an unnamed tablet is still identified",floorActor()==="Warehouse link");

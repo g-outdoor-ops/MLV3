@@ -125,7 +125,9 @@ export function FloorLinkScreen({view,who,setWho,asking,setAsking,open,setOpen,b
                 {order&&<em>{order.customer} · {order.id}</em>}
                 {order?.notes||step.note}
               </p>}
-              {step.done
+              {step.workOrderId
+                ?<p className="floor-link-runref">Counted on run {step.workOrderId} — use the run above</p>
+                :step.done
                 ?<p className="floor-link-done">Done{step.doneBy?` · ${step.doneBy}`:""}</p>
                 :open===step.id
                   ?<Enter label={step.actualQty!=null?`Total made — ${num(step.actualQty)} already recorded`:"How many did you make?"} initial={step.actualQty??step.qty} scrap busy={busy}

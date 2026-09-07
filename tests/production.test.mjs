@@ -252,5 +252,67 @@ t("an order already on the plan is not offered again",!ids(planned).includes("SO
 t("its steps are all marked wholesale",planned.prodDays.flatMap(d=>d.steps).filter(s=>s.linkedTo==="SO-ONCE").every(s=>s.source==="wholesale"));
 }
 
+// ---------------------------------------------------------------------------
+// Phase 4: the plan and the run are one record.
+//
+// They were two. A mould step stored actualQty, the work order carrying it out stored good, nothing
+// connected them, and whichever screen you typed into was the only one that knew — so the production
+// calendar and the production run disagreed and never converged. These assertions are the fix's shape:
+// where a run exists, IT is the record, and nothing offers to type the number twice.
+if(app){
+const {normalize,demoData,stepProgress,stepLoad,runSteps,runFromSteps,dayLoad,planTotals,DEFAULT_BLANKS,DEFAULT_MACHINES}=app;
+const d=normalize(demoData);
+const all=d.prodDays.flatMap(x=>x.steps);
+const runs=d.workOrders;
+const byId=id=>all.find(s=>s.id===id);
+
+console.log("\nA step being run reads its numbers off the run:");
+const linked=byId("ps-m1");
+t("the demo step is linked to a run",linked.workOrderId==="WO-121");
+const run=runs.find(w=>w.id==="WO-121");
+// WO-121 covers the 7th (500) and the 8th (500) and has made 620: the first day is full, the second
+// has 120 on it. That is how a run over two days actually progresses.
+t("the first day of the run is full",stepProgress(linked,runs,all).made===500,`${stepProgress(linked,runs,all).made}`);
+t("the balance lands on the second day",stepProgress(byId("ps-m2"),runs,all).made===120,`${stepProgress(byId("ps-m2"),runs,all).made}`);
+t("no day is credited with more than it planned",stepProgress(linked,runs,all).made<=linked.qty);
+t("the two days add up to what the run made",
+  stepProgress(linked,runs,all).made+stepProgress(byId("ps-m2"),runs,all).made===run.good);
+t("the finished day is done",stepProgress(linked,runs,all).done===true);
+t("the day still being made is not",stepProgress(byId("ps-m2"),runs,all).done===false);
+// Scrap is not split across days — nobody knows which shift it happened on, so it stays on the run.
+t("scrap is reported against the run, not guessed at per day",stepProgress(linked,runs,all).scrap===0&&stepProgress(linked,runs,all).runScrap===14);
+t("the step names the run that owns it",stepProgress(linked,runs,all).runId==="WO-121");
+
+console.log("\nA step with no run still keeps its own record:");
+const loose={id:"x",type:"mold",source:"amazon",target:"b-s5",qty:300,actualQty:180};
+t("its own figure is used",stepProgress(loose,runs,all).made===180);
+t("and it is not marked done early",stepProgress(loose,runs,all).done===false);
+
+console.log("\nCapacity counts the run's work, not a stale copy of it:");
+// Before the fix the 7th read as untouched, because the plan's own actualQty was never written.
+const seventh=d.prodDays.find(x=>x.date==="2026-09-07");
+const load=dayLoad(seventh,DEFAULT_BLANKS,DEFAULT_MACHINES,runs,all);
+t("the day is still measured against the machine",load.find(l=>l.machine.makes==="5-gal").units===500);
+t("a part-made day keeps its planned load",stepLoad(byId("ps-m2"),runs,all)===500);
+t("the month total is unchanged by who is recording it",planTotals(d.prodDays,DEFAULT_BLANKS,DEFAULT_MACHINES,runs).totalUnits===5556,
+  `${planTotals(d.prodDays,DEFAULT_BLANKS,DEFAULT_MACHINES,runs).totalUnits}`);
+
+console.log("\nRaising a run from the plan:");
+const step=byId("ps-m6");                        // regular 5-gal, 14th, unlinked
+const covered=runSteps(step,d.prodDays);
+t("a run covers the days that continue it",covered.length===3&&covered[0].id==="ps-m6",`${covered.map(c=>c.id)}`);
+t("and stops before a different batch",covered.every(c=>c.target===step.target));
+const work=runFromSteps(covered,d,"WO-900","2026-09-14");
+t("the run is for everything those days planned",work.quantity===1440,`${work.quantity}`);
+t("it lands on the line that machine is",work.line==="Line 1",`${work.line}`);
+t("it is raised as a catalogue item the floor screens understand",
+  d.itemRates.some(r=>r.item===work.item),`${work.item}`);
+t("it spans the days it covers",work.days===3,`${work.days}`);
+t("and starts where the plan put it",work.date==="2026-09-14");
+// A step already being run must not be swept into a second one.
+t("a step already on a run is not covered again",!runSteps(byId("ps-m1"),d.prodDays).some(x=>x.id==="ps-m2"));
+t("a step that is not moulding raises no run",runFromSteps([all.find(x=>x.type==="assemble")],d,"WO-901","2026-09-15")===null);
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail?1:0);

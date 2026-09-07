@@ -18,7 +18,8 @@ to invoicing or payments as touching real money.
 ## The state of play
 
 `main` is deployed and pushed through **`3af0039`**. Committed on top and **not pushed**: `8ff28e0`
-(Phase 3, wholesale orders planned onto the calendar) and the warehouse link.
+(Phase 3, wholesale orders planned onto the calendar), `ceab059` (the warehouse link), and Phase 4 in
+the tree — the fix for the plan and the run holding two different numbers.
 
 The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
 The production rebuild is `4b2ed00` (Phase 1, model), `8c0bf42` (Phase 2, the calendar) and Phase 3 in
@@ -221,7 +222,43 @@ involved for a copy in the test file to prove anything about the code that ships
 (the `engines` field still says `>=22.13 <23`, so on 22.13–22.17 those assertions fail loudly rather
 than passing quietly). Worth bumping `engines`, or moving the rest of the suites the same way.
 
-### The warehouse link (in the tree, uncommitted)
+### Phase 4 — the plan and the run are one record (in the tree, uncommitted)
+
+**This was a real defect and it was mine.** A mould step and the work order carrying it out were two
+independent records of the same bottles: the plan stored `actualQty`, the run stored `good`, nothing
+connected them, and whichever screen you typed into was the only one that knew. The production calendar
+and the production run disagreed and never converged — and the warehouse link showed both, with a button
+under each, so the same 24 bottles could be counted twice.
+
+- `ProdStep.workOrderId` links a step to the run carrying it out. **While it is set, the run is the
+  record** — `stepProgress()` reads the run and the step's own fields are ignored rather than kept in
+  step, because two copies of a number are two numbers. Every reader goes through it: `stepLoad`,
+  `dayLoad`, `planTotals`, the plan screen, `floorView`, the tablet.
+- A run usually spans several days and each of those days is a step, so the run's output **fills them in
+  date order** — which is how a multi-day run actually progresses. WO-121 has made 620 of 1,000 across
+  the 7th and 8th: the 7th shows 500 and done, the 8th shows 120 and part-made. Scrap is *not* split;
+  nobody knows which shift it happened on, so it stays reported against the run.
+- **Nothing offers to type the number twice.** A step with a run shows "Open WO-121" instead of *Record
+  made*; the tablet says "Counted on run WO-121 — use the run above"; and `/api/floor` refuses a
+  `step.record` against a run-owned step, naming the run instead.
+- **"Send to the floor"** on a planned mould step raises the run: `runSteps` gathers the days that
+  continue it (stopping at a real gap — a weekend is not a gap, a fortnight is a different batch) and
+  `runFromSteps` builds a work order for their total, on the right line, as a catalogue item the floor
+  screens understand.
+- `Machine.line` was added because machines and lines were two vocabularies for one physical thing —
+  which is how a run raised against a machine could land on a line nobody was looking at.
+
+### Still open on Phase 4
+
+- **Two production calendars remain.** *Production calendar* (the month grid) draws work orders;
+  *Production plan* draws steps. They now agree about numbers, but they are still two screens showing
+  overlapping work, and the month grid knows nothing about steps. Merging them is the obvious next move
+  and was not attempted here.
+- **Assembly, palletizing and shipping steps have no run**, so they keep their own record. That is
+  correct today — no work order models them — but it means "who recorded this" comes from two places
+  depending on the step type.
+
+### The warehouse link (`ceab059`)
 
 A no-login URL for the shop tablet: `/floor?t=<token>`. It shows the production schedule, records what
 was made against each step, and updates the run in front of the operator. The owner creates and replaces
@@ -282,7 +319,7 @@ on Render before the tablet is handed over.
 
 - **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
   `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
-  Run with `node tests/<name>.test.mjs`. 213 assertions.
+  Run with `node tests/<name>.test.mjs`. 241 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.
