@@ -332,3 +332,7 @@
 .catalogue-caps{display:grid;grid-template-columns:64px 1fr;gap:6px}
 .catalogue .secondary{margin-top:10px}
 @media(max-width:900px){.catalogue-grid,.catalogue-grid.sku{grid-template-columns:1fr 1fr}.catalogue-grid.head{display:none}}
+.catalogue-map{margin:4px 0 10px;padding-left:20px;color:#4a5a50;font-size:.86rem;line-height:1.75}
+.catalogue-map b{color:#25332a}
+.catalogue-note{margin:0 0 6px;font-size:.82rem;color:#6d7a70;line-height:1.55}
+.catalogue-grid.sku{grid-template-columns:.9fr 1.3fr .8fr 1.1fr 1.2fr 1.2fr .6fr auto}

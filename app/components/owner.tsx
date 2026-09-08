@@ -240,7 +240,6 @@ export function CatalogueEditor(){
   const {data,commit,notify}=useApp();
   const [blanks,setBlanks]=useState<Blank[]>(data.blanks?.length?data.blanks:DEFAULT_BLANKS);
   const [skus,setSkus]=useState<Sku[]>(data.skus?.length?data.skus:DEFAULT_SKUS);
-  const [open,setOpen]=useState(false);
   const dirty=JSON.stringify({blanks,skus})!==JSON.stringify({blanks:data.blanks,skus:data.skus});
   // How much of the plan points at each of these, so nothing in use disappears by accident.
   const uses=(id:string)=>(data.prodDays||[]).flatMap(d=>d.steps||[]).filter(x=>x.target===id).length;
@@ -258,10 +257,17 @@ export function CatalogueEditor(){
 
   return <section className="panel catalogue">
     <div className="panel-title">
-      <div><h2>Moulds &amp; products</h2><p>What the machines actually make, and what the production plan schedules against. Prices live in the table above; this is the shape of the thing.</p></div>
-      <button onClick={()=>setOpen(o=>!o)}>{open?"Hide":"Show"}</button>
+      <div><h2>Moulds &amp; products</h2><p>What the machines actually make, and what the production plan schedules against.</p></div>
     </div>
-    {open&&<>
+    <>
+      <ol className="catalogue-map">
+        <li><b>Blank</b> — what a machine moulds. Decides which line the run goes on.</li>
+        <li><b>Item rate</b> — the product as it is priced, stocked, packed and photographed. One stock
+          line in Inventory, one photo, one material, one box size.</li>
+        <li><b>Product</b> — an Amazon listing. Points at the blank it is moulded from, and at the item
+          rate it is priced and stocked as.</li>
+      </ol>
+      <p className="catalogue-note">Photos hang off the item rate&apos;s name, so a product linked to one shows the same picture on the warehouse tablet. A product with no item rate has no price, no stock line and no photo — the floor gets a name and nothing else.</p>
       <h3 className="catalogue-head">Blanks — what comes off a machine</h3>
       <div className="catalogue-grid head"><span>Name</span><span>Size</span><span>Neck</span><span>Sold plain</span><span>On the plan</span><span/></div>
       {blanks.map((b,i)=><div className="catalogue-grid" key={b.id}>
@@ -275,13 +281,17 @@ export function CatalogueEditor(){
       <button className="secondary" onClick={()=>setBlanks(b=>[...b,{id:uid("b"),name:"New blank",size:"5-gal",neck:"regular"}])}>+ Add a blank</button>
 
       <h3 className="catalogue-head">Products — what a blank becomes</h3>
-      <div className="catalogue-grid sku head"><span>Code</span><span>Name</span><span>Sold on</span><span>Moulded from</span><span>Caps</span><span>On the plan</span><span/></div>
+      <div className="catalogue-grid sku head"><span>Code</span><span>Name</span><span>Sold on</span><span>Moulded from</span><span>Priced &amp; stocked as</span><span>Caps</span><span>On the plan</span><span/></div>
       {skus.map((x,i)=><div className="catalogue-grid sku" key={x.id}>
         <b>{x.id}</b>
         <input value={x.name} onChange={e=>setSku(i,{name:e.target.value})}/>
         <select value={x.channel} onChange={e=>setSku(i,{channel:e.target.value as Sku["channel"]})}>
           <option value="amazon">Amazon</option><option value="wholesale">Wholesale</option><option value="both">Both</option></select>
         <select value={x.blankId} onChange={e=>setSku(i,{blankId:e.target.value})}>{blanks.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select>
+        <select value={x.itemId||""} onChange={e=>setSku(i,{itemId:e.target.value||undefined})}>
+          <option value="">Not linked</option>
+          {data.itemRates.filter(r=>r.kind!=="raw").map(r=><option key={r.id} value={r.item}>{r.item}</option>)}
+        </select>
         <span className="catalogue-caps">
           <input type="number" min="0" value={x.caps[0]?.qty??0}
             onChange={e=>{const q=Math.max(0,Number(e.target.value)||0);setSku(i,{caps:q?[{component:x.caps[0]?.component||"Screw cap",qty:q}]:[]})}}/>
@@ -298,7 +308,7 @@ export function CatalogueEditor(){
         <button className="primary" disabled={!dirty} onClick={save}>{dirty?"Save moulds & products":"Saved"}</button>
       </div>
       <p className="link-warning">A code cannot be changed once the plan references it — the calendar would lose track of what it is making. Add a new product instead.</p>
-    </>}
+    </>
   </section>;
 }
 

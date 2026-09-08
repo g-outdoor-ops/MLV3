@@ -17,8 +17,8 @@ to invoicing or payments as touching real money.
 
 ## The state of play
 
-`main` is deployed and pushed through **`07a525e`** — Phases 1-12. Phase 13 is in the tree, uncommitted:
-how a product ships, and an editor for the catalogue the plan schedules against.
+`main` is deployed and pushed through **`e1928b1`** — Phases 1-13. Phase 14 is in the tree, uncommitted:
+the inventory side joined up.
 
 The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
 The production rebuild is `4b2ed00` (Phase 1, model), `8c0bf42` (Phase 2, the calendar) and Phase 3 in
@@ -472,7 +472,7 @@ typed again, even though `guardStepEdit` has always had a branch for exactly tha
 is labelled with what it becomes ("Regular 5-gal — for 5-Gallon Bottle · no cap") because nobody orders
 a blank by name.
 
-### Phase 13 — how a product ships, and the catalogue behind the plan (in the tree, uncommitted)
+### Phase 13 — how a product ships, and the catalogue behind the plan (`e1928b1`)
 
 **How it ships.** The item rate form now asks whether a product goes out loose, boxed, or boxed on
 pallets, and only asks for boxes per pallet and the pallet pattern when the answer is pallets. Box size
@@ -494,6 +494,42 @@ through the audit log.
 
 `blanks` and `skus` are also **owner-only on the server** now, alongside settings, roles and item rates.
 They are catalogue: a floor tablet had no business being able to rewrite them.
+
+### Phase 14 — the inventory side, joined up (in the tree, uncommitted)
+
+Four things from setting up real item rates.
+
+- **A material could not be typed.** "Main material" was a dropdown of raw inventory rows, so a company
+  with none entered had an empty list and no way to name what a product is made from. It is a field with
+  suggestions now, and a material named there that the warehouse is not counting yet **becomes a raw
+  stock line**, so the floor's readiness check has something to check against instead of reporting it
+  untracked forever.
+- **Packing is two questions, because the answers come apart.** *How it is packed* — boxed, not boxed,
+  straight onto a pallet — and *how it is shipped* — in boxes with no pallet, boxes on a pallet, or on a
+  pallet with no boxes. The per-pallet figure is asked for only when something goes on a pallet, and it
+  is labelled for what is actually being counted: boxes on a boxed pallet, bottles on a bare one. The
+  packing bench follows: a pallet with no boxes counts bottles and asks for no cartons at all.
+- **Moulds & products no longer hides itself.** It is where the products the plan schedules against
+  live, and hiding them is how they went unnoticed for four phases.
+- **The five things are connected now, and say so.** A product (Amazon listing) gained `itemId` — the
+  item rate it is priced, stocked, photographed and packed as — because without it a run raised for an
+  Amazon product had no item rate to read a material, a box size or a photo from, and the floor got a
+  name and nothing else. The panel states the shape in three lines:
+
+  > **Blank** — what a machine moulds; decides which line the run goes on.
+  > **Item rate** — the product as priced, stocked, packed and photographed. One stock line, one photo.
+  > **Product** — an Amazon listing, pointing at its blank and at the item rate it is sold as.
+
+  Photos hang off the item rate's *name*, which is also the inventory row's name, so one picture serves
+  the inventory list, the build sheet and the tablet.
+
+### Still open on the inventory side
+
+- **Item rates and products are still two lists for one thing.** The link makes them work together; it
+  does not merge them. A wholesale-only product needs no Amazon listing and an Amazon listing without an
+  item rate has no price — which is correct, but somebody has to keep both in step by hand.
+- **Blanks and products have no photos of their own** — only item rates do, which is why the link
+  matters.
 
 ### Still open on the floor screen
 
@@ -583,7 +619,7 @@ on Render before the tablet is handed over.
 
 - **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
   `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
-  Run with `node tests/<name>.test.mjs`. 413 assertions.
+  Run with `node tests/<name>.test.mjs`. 423 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.

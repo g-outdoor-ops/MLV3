@@ -111,7 +111,7 @@ export type PackingRecord={
   batchId?:string;note?:string;startedAt?:string;doneAt?:string};
 
 export type PackingPlan={
-  packedAs:"loose"|"boxed"|"palletized";
+  packedAs:"loose"|"boxed"|"pallet";shipsAs:"boxed"|"pallet-boxed"|"pallet-loose";perPallet:number;
   received:number;perCase:number;cartons:number;casesPerPallet:number;pallets:number;
   caps:AssemblyCap[];label?:string;boxItem?:string;boxSize?:string;palletPattern?:string;
   uses:{item:string;qty:number}[]};
@@ -127,15 +127,20 @@ export function packingPlan(w:WorkOrder,itemRates:ItemRate[]):PackingPlan{
   const rate=itemRates.find(r=>r.item===w.item);
   const received=w.packing?.received??w.good;
   const perCase=rate?.unitsPerCase||1;
-  const cartons=Math.ceil(received/perCase);
-  const packedAs=rate?.packedAs||(rate?.casesPerPallet?"palletized":"boxed");
-  const casesPerPallet=packedAs==="palletized"?(rate?.casesPerPallet||0):0;
-  const pallets=casesPerPallet?Math.ceil(cartons/casesPerPallet):0;
+  // Nothing to count in boxes if it does not go in one.
+  const cartons=(rate?.packedAs||"boxed")==="loose"?0:Math.ceil(received/perCase);
+  const packedAs=rate?.packedAs||"boxed";
+  const shipsAs=rate?.shipsAs||(rate?.casesPerPallet?"pallet-boxed":"boxed");
+  const perPallet=rate?.perPallet??rate?.casesPerPallet??0;
+  const casesPerPallet=shipsAs==="pallet-boxed"?perPallet:0;
+  const pallets=shipsAs==="pallet-boxed"?(perPallet?Math.ceil(cartons/perPallet):0)
+    :shipsAs==="pallet-loose"?(perPallet?Math.ceil(received/perPallet):0)
+    :0;
   const uses:{item:string;qty:number}[]=[];
   if(rate?.boxItem&&cartons)uses.push({item:rate.boxItem,qty:cartons});
   if(rate?.label&&received)uses.push({item:rate.label,qty:received});
   if(w.kind!=="assembly")for(const c of rate?.caps||[])uses.push({item:c.component,qty:c.qty*received});
-  return {packedAs,received,perCase,cartons,casesPerPallet,pallets,caps:rate?.caps||[],
+  return {packedAs,shipsAs,perPallet,received,perCase,cartons,casesPerPallet,pallets,caps:rate?.caps||[],
     label:rate?.label,boxItem:rate?.boxItem,boxSize:rate?.boxSize,palletPattern:rate?.palletPattern,uses};
 }
 
@@ -151,7 +156,7 @@ export const newBatchId=(w:WorkOrder,when=new Date())=>
 export function packingUses(w:WorkOrder,itemRates:ItemRate[],entry:{received:number;cartons:number}){
   const rate=itemRates.find(r=>r.item===w.item);
   const uses:{item:string;qty:number}[]=[];
-  if(rate?.boxItem&&entry.cartons>0)uses.push({item:rate.boxItem,qty:entry.cartons});
+  if(rate?.boxItem&&entry.cartons>0&&rate.packedAs!=="loose")uses.push({item:rate.boxItem,qty:entry.cartons});
   if(rate?.label&&entry.received>0)uses.push({item:rate.label,qty:entry.received});
   // An assembly run consumed its caps as it recorded units; charging for them again would empty the
   // shelf twice for one bottle.
@@ -214,9 +219,13 @@ export type RoleSetting={id:string;name:string;members:string[];permissions:Reco
 export type ItemRate={id:string;item:string;rate:number;minimum:number;discountLimit:number;floor?:number;unitsPerCase?:number;kind?:"finished"|"raw";cost?:number;sub?:string;qcChecks?:string[];material?:string;blankId?:string;caps?:AssemblyCap[];
   // The build sheet — what somebody who has never made this before needs in front of them. "5 Gal + 2
   // Screw Caps" is a name, not an instruction.
-  // How it leaves: loose, in boxes, or boxed onto pallets. It decides what the packing bench is asked
-  // to count — a product that never goes on a pallet should not be asking anybody for a pallet number.
-  packedAs?:"loose"|"boxed"|"palletized";
+  // Two different questions, because the answers come apart: bottles can be boxed and then shipped
+  // loose on a pallet, or shipped in boxes with no pallet at all. Together they decide what the packing
+  // bench is asked to count — a product that never sees a pallet should not ask anybody for a pallet
+  // number. `perPallet` counts boxes when the pallet is boxed and bottles when it is not.
+  packedAs?:"loose"|"boxed"|"pallet";
+  shipsAs?:"boxed"|"pallet-boxed"|"pallet-loose";
+  perPallet?:number;
   mold?:string;colour?:string;label?:string;boxItem?:string;boxSize?:string;casesPerPallet?:number;
   palletPattern?:string;photo?:string;instructions?:string};
 export type InventoryRow={id:string;item:string;onHand:number;committed:number;reorder:number;cost:number;kind?:"finished"|"raw";unit?:string;onOrder?:number;eta?:string;usage?:string;supplier?:string};
@@ -253,6 +262,10 @@ export type Sku={
                                       // labelled and boxed, so it is still an assembly step
   unitsPerPalletLtl?:number;          // trailer door limits differ — LTL fits fewer
   unitsPerPalletFtl?:number;
+  // The catalogue item this listing is priced, stocked, photographed and packed as. Without it an
+  // Amazon product is an island: a run raised for one has no item rate to read a material, a box size
+  // or a photo from, so the floor gets a name and nothing else.
+  itemId?:string;
 };
 
 // Two machines, one per bottle size, running in parallel. 500 bottles each on a six-hour
@@ -271,12 +284,12 @@ export const DEFAULT_BLANKS:Blank[]=[
   {id:"b-r3",name:"Regular 3-gal",size:"3-gal",neck:"regular",sellable:true},
 ];
 export const DEFAULT_SKUS:Sku[]=[
-  {id:"D5-T0WT-Q5XP",name:"5 Gal + 2 Screw Caps",channel:"amazon",blankId:"b-s5",
+  {id:"D5-T0WT-Q5XP",name:"5 Gal + 2 Screw Caps",channel:"amazon",blankId:"b-s5",itemId:"5-Gallon Bottle · 2 caps",
     caps:[{component:"Screw cap",qty:2}],unitsPerPalletLtl:80,unitsPerPalletFtl:96},
-  {id:"MI-89OO-OBNM",name:"3 Gal + 2 Screw Caps",channel:"amazon",blankId:"b-s3",
+  {id:"MI-89OO-OBNM",name:"3 Gal + 2 Screw Caps",channel:"amazon",blankId:"b-s3",itemId:"3-Gallon Bottle · 2 caps",
     caps:[{component:"Screw cap",qty:2}],unitsPerPalletLtl:150,unitsPerPalletFtl:180},
   // Bottle only. No caps, but it is still labelled and boxed, so assembly still happens.
-  {id:"GO-WAAU-08PA",name:"5 Gal Bottle Only",channel:"amazon",blankId:"b-r5",
+  {id:"GO-WAAU-08PA",name:"5 Gal Bottle Only",channel:"amazon",blankId:"b-r5",itemId:"5-Gallon Bottle · no cap",
     caps:[],unitsPerPalletLtl:80,unitsPerPalletFtl:96},
   {id:"BV-B81Q-X4UN",name:"5 Gal + 2 Silicone Caps",channel:"amazon",blankId:"b-r5",
     caps:[{component:"Silicone cap",qty:2}],unitsPerPalletLtl:80,unitsPerPalletFtl:96},
@@ -477,9 +490,9 @@ export const demoData:AppData={
   {id:"r3",name:"Warehouse",members:["Luis"],permissions:{crm:"none",sales:"view",calendar:"view",financials:"none",operations:"edit",settings:"none"}},
  ],
  itemRates:[
-  {id:"i1",item:"5-Gallon Bottle · 2 caps",sub:"with 2 screw caps",mold:"5-gal screw-top mould",colour:"Natural",label:"Labels · 5-gal",boxItem:"Cartons 18×18×10",boxSize:"18×18×10",casesPerPallet:48,palletPattern:"6 per layer, 8 high, stretch-wrapped",instructions:"Caps hand-tightened, not cross-threaded. Label square to the handle.",rate:9.9,floor:8.75,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.85,material:"PET preforms · 780g (5-gal)",qcChecks:["Weight (780g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
-  {id:"i2",item:"3-Gallon Bottle · 2 caps",sub:"with 2 screw caps",mold:"3-gal screw-top mould",colour:"Natural",label:"Labels · 3-gal",boxItem:"Cartons 18×18×10",boxSize:"18×18×10",casesPerPallet:60,palletPattern:"10 per layer, 6 high, stretch-wrapped",rate:8.5,floor:7.6,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.1,material:"PET preforms · 560g (3-gal)",qcChecks:["Weight (560g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
-  {id:"i3",item:"5-Gallon Bottle · no cap",sub:"no cap",mold:"5-gal regular mould",colour:"Natural",label:"Labels · 5-gal",boxItem:"Cartons 18×18×10",boxSize:"18×18×10",casesPerPallet:48,palletPattern:"6 per layer, 8 high, stretch-wrapped",rate:8.6,floor:7.7,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.4,material:"PET preforms · 780g (5-gal)",qcChecks:["Weight (780g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
+  {id:"i1",item:"5-Gallon Bottle · 2 caps",sub:"with 2 screw caps",mold:"5-gal screw-top mould",colour:"Natural",label:"Labels · 5-gal",boxItem:"Cartons 18×18×10",boxSize:"18×18×10",packedAs:"boxed",shipsAs:"pallet-boxed",perPallet:48,casesPerPallet:48,palletPattern:"6 per layer, 8 high, stretch-wrapped",instructions:"Caps hand-tightened, not cross-threaded. Label square to the handle.",rate:9.9,floor:8.75,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.85,material:"PET preforms · 780g (5-gal)",qcChecks:["Weight (780g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
+  {id:"i2",item:"3-Gallon Bottle · 2 caps",sub:"with 2 screw caps",mold:"3-gal screw-top mould",colour:"Natural",label:"Labels · 3-gal",boxItem:"Cartons 18×18×10",boxSize:"18×18×10",packedAs:"boxed",shipsAs:"pallet-boxed",perPallet:60,casesPerPallet:60,palletPattern:"10 per layer, 6 high, stretch-wrapped",rate:8.5,floor:7.6,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.1,material:"PET preforms · 560g (3-gal)",qcChecks:["Weight (560g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
+  {id:"i3",item:"5-Gallon Bottle · no cap",sub:"no cap",mold:"5-gal regular mould",colour:"Natural",label:"Labels · 5-gal",boxItem:"Cartons 18×18×10",boxSize:"18×18×10",packedAs:"boxed",shipsAs:"pallet-boxed",perPallet:48,casesPerPallet:48,palletPattern:"6 per layer, 8 high, stretch-wrapped",rate:8.6,floor:7.7,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.4,material:"PET preforms · 780g (5-gal)",qcChecks:["Weight (780g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
   {id:"i4",item:"Screw Caps · 10-pack",sub:"pack of 10",rate:3.2,floor:2.4,minimum:10,discountLimit:10,unitsPerCase:20,kind:"finished",cost:0.61,material:"55mm screw caps (bulk)",qcChecks:["Thread fit on 55mm neck","Liner seated","Visual · flash / short shots"]},
   {id:"i5",item:"Silicone Caps · 3-pack",sub:"pack of 3",rate:4.99,floor:3.8,minimum:10,discountLimit:10,unitsPerCase:30,kind:"finished",cost:1.15,material:"Silicone caps (bulk)",qcChecks:["Seal test on 55mm neck","Visual · tears / voids"]},
  ],
@@ -1031,7 +1044,9 @@ export function runFromSteps(steps:ProdStep[],data:AppData,id:string,startDate:s
   // An assembly step already names what it is making — a catalogue item for wholesale, a SKU for
   // Amazon — so it is used directly rather than resolved back through a blank.
   const item=assembly
-    ?(data.itemRates.find(r=>r.item===first.target)?.item||data.skus?.find(x=>x.id===first.target)?.name||first.target)
+    ?(data.itemRates.find(r=>r.item===first.target)?.item
+      ||data.skus?.find(x=>x.id===first.target)?.itemId
+      ||data.skus?.find(x=>x.id===first.target)?.name||first.target)
     :(fromOrder||data.itemRates.find(r=>r.blankId===first.target)?.item||blank?.name||first.target);
   const customer=order?data.customers.find(c=>c.id===order.customerId)?.name:"";
   return {

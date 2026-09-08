@@ -501,16 +501,40 @@ t("and the code cannot be edited once it is referenced",/A code cannot be change
 // They are catalogue, like prices: a floor tablet must not be able to rewrite them.
 t("blanks and products are owner-only on the server",/"blanks", "skus"/.test(authz));
 
+console.log("\nThe five things are actually connected:");
+const {normalize:n3,demoData:dd3,runFromSteps:rfs}=app;
+const d3=n3(dd3);
+const sku=d3.skus.find(x=>x.id==="D5-T0WT-Q5XP");
+t("a product names the blank it is moulded from",!!d3.blanks.find(b=>b.id===sku.blankId));
+t("and the item rate it is priced and stocked as",!!d3.itemRates.find(r=>r.item===sku.itemId));
+t("that item has a stock line",!!d3.inventory.find(i=>i.item===sku.itemId));
+// Without the link a run raised for an Amazon product had no item rate to read from, so the floor got
+// a name and no material, box size or photo.
+const asmStep={id:"s",type:"assemble",source:"amazon",target:"D5-T0WT-Q5XP",qty:100};
+t("a run raised for that product lands on the catalogue item",
+  rfs([asmStep],d3,"WO-T","2026-09-15").item===sku.itemId,`${rfs([asmStep],d3,"WO-T","2026-09-15").item}`);
+t("so its build sheet can find a material",!!d3.itemRates.find(r=>r.item===sku.itemId)?.material);
+
 console.log("\nAn item says how it ships:");
 const {packingPlan,normalize:norm2,demoData:demo2}=app;
 const d2=norm2(demo2);
 const wo=d2.workOrders.find(w=>w.item==="5-Gallon Bottle · no cap");
 t("the item rate form asks",/How it ships/.test(modal)&&/packedAs/.test(modal));
-t("boxes per pallet is only asked for when it is palletized",/packedAs==="palletized"&&<label>Boxes per pallet/.test(modal));
-const rates=d2.itemRates.map(r=>r.item==="5-Gallon Bottle · no cap"?{...r,packedAs:"boxed",casesPerPallet:48}:r);
-t("a boxed product is not asked for a pallet count",packingPlan(wo,rates).pallets===0);
-t("a palletized one is",packingPlan(wo,d2.itemRates.map(r=>r.item==="5-Gallon Bottle · no cap"?{...r,packedAs:"palletized"}:r)).pallets>0);
-t("and the plan says which it is",["loose","boxed","palletized"].includes(packingPlan(wo,rates).packedAs));
+// The pallet count is asked for only when something goes on a pallet, and it is labelled for what is
+// actually being counted there — boxes on a boxed pallet, bottles on a bare one.
+t("a pallet count is only asked for when it ships on one",/shipsAs!=="boxed"&&<label>/.test(modal));
+t("and it is labelled boxes or bottles to suit",/shipsAs==="pallet-boxed"\?"Boxes per pallet":"Bottles per pallet"/.test(modal));
+t("a material can be typed, not only picked",/list="ml-raws"/.test(modal)&&/<datalist id="ml-raws">/.test(modal));
+t("and a new material becomes a stock line to count",/kind:"raw" as const/.test(modal));
+const rate=(patch)=>d2.itemRates.map(r=>r.item==="5-Gallon Bottle · no cap"?{...r,...patch}:r);
+t("boxes with no pallet ask for no pallet count",packingPlan(wo,rate({packedAs:"boxed",shipsAs:"boxed"})).pallets===0);
+t("boxes on a pallet count boxes",packingPlan(wo,rate({packedAs:"boxed",shipsAs:"pallet-boxed",perPallet:48})).pallets===Math.ceil(packingPlan(wo,rate({packedAs:"boxed",shipsAs:"pallet-boxed",perPallet:48})).cartons/48));
+// A pallet with no boxes counts bottles, not cartons — that is the whole reason the two questions split.
+const loosePallet=packingPlan(wo,rate({packedAs:"loose",shipsAs:"pallet-loose",perPallet:500}));
+t("a pallet with no boxes counts bottles",loosePallet.pallets===Math.ceil(loosePallet.received/500),`${loosePallet.pallets}`);
+t("and asks for no cartons at all",loosePallet.cartons===0);
+t("the plan says how it is packed and how it ships",
+  ["loose","boxed","pallet"].includes(loosePallet.packedAs)&&["boxed","pallet-boxed","pallet-loose"].includes(loosePallet.shipsAs));
 }
 
 // One calendar, not two. The month grid and the day list were separate screens drawing overlapping
