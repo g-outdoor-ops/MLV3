@@ -12,8 +12,8 @@
 //  · Nothing the floor has already made may be edited away silently. Every edit runs guardStepEdit
 //    first and, when it has something to say, the person has to answer it before the change lands.
 import { useState } from "react";
-import { DEFAULT_BLANKS, DEFAULT_MACHINES, DEFAULT_SKUS, STAGE_SHIPPED, addSteps, dayLoad, dueIso, fmtDue, stageOf, guardStepEdit, orderNeeds, ordersToPlan, planOrder, loadAheadOf, planTotals, productionQueue, reconcileStep, rushImpact, recordStep, runFromSteps, runSteps, stepProgress, stepTargetName, todayIso,
-  type AppData, type Blank, type Machine, type MachineLoad, type OrderRecord, type ProdDay, type ProdSource, type ProdStep, type WorkOrder } from "../app-data";
+import { DEFAULT_BLANKS, DEFAULT_MACHINES, DEFAULT_SKUS, SEPTEMBER_PLAN, STAGE_SHIPPED, addSteps, dayLoad, dueIso, fmtDue, stageOf, guardStepEdit, loadPlan, orderNeeds, ordersToPlan, planOrder, loadAheadOf, planTotals, productionQueue, reconcileStep, rushImpact, recordStep, runFromSteps, runSteps, stepProgress, stepTargetName, todayIso,
+  type AppData, type Blank, type Machine, type MachineLoad, type OrderRecord, type PlanLoad, type ProdDay, type ProdSource, type ProdStep, type WorkOrder } from "../app-data";
 import { Kpi, nextId, num, uid, useApp } from "./store";
 
 export const PRODUCTION_CALENDAR="Production calendar";
@@ -55,6 +55,7 @@ export function ProductionCalendarView(){
   const [adding,setAdding]=useState<string|null>(null);
   // The guard's question, held until the person answers it. Nothing is written while this is set.
   const [pending,setPending]=useState<{message:string;confirm:()=>void}|null>(null);
+  const [loadingPlan,setLoadingPlan]=useState(false);
 
   const days=all.filter(d=>monthOf(d.date)===ym);
   const runs=data.workOrders||[];
@@ -138,8 +139,17 @@ export function ProductionCalendarView(){
         <h1>Production calendar</h1>
         <p className="intro">Every step, run, delivery and due date on one schedule — and what each day asks of the 5-gallon and 3-gallon lines. The two cannot cover for each other, so a day is over capacity when either one is.</p>
       </div>
-      {owner&&<button className="primary" onClick={()=>setModal("workorder")}>+ Work order</button>}
+      <div className="button-row">
+        {owner&&<button className="secondary" onClick={()=>setLoadingPlan(true)}>Load the September plan</button>}
+        {owner&&<button className="primary" onClick={()=>setModal("workorder")}>+ Work order</button>}
+      </div>
     </div>
+
+    {loadingPlan&&owner&&<PlanLoader data={data} onClose={()=>setLoadingPlan(false)} onLoad={(next,s)=>{
+      commit(()=>next,"plan.load",`September plan loaded — ${s.added} steps across ${s.days} days`);
+      notify(`September plan loaded · ${s.added} steps on ${s.days} days${s.kept.length?` · ${s.kept.length} already under way were kept`:""}`,PRODUCTION_CALENDAR);
+      setLoadingPlan(false);
+    }}/>}
 
     {owner&&waiting.length>0&&<div className="company-health" style={{marginBottom:12}}>
       <span><i className="health-dot" style={{background:"#cf6822"}}/>Waiting for a slot: <b>{waiting.map(w=>`${w.id} (${num(w.quantity)} × ${w.item.split(" · ")[0]})`).join(", ")}</b></span>
@@ -628,6 +638,60 @@ function AddStep({date,blanks,skus,onAdd,onCancel}:{date:string;blanks:{id:strin
     <div className="plan-form-actions">
       <button className="secondary" onClick={onCancel}>Cancel</button>
       <button className="primary" disabled={!target} onClick={()=>onAdd({id:uid("st"),type,source,target,qty:Math.max(0,Number(qty)||0),...(note?{note}:{})})}>Add to {fmtDue(date)}</button>
+    </div>
+  </div>;
+}
+
+/**
+ * Loading the published month onto a calendar somebody is already working from.
+ *
+ * The whole point of this screen is that the plan and the floor hold one number, so replacing the plan
+ * wholesale would undo that: a step a run was raised from, or one the floor has already recorded
+ * against, is a record of bottles that exist. loadPlan keeps those and wholesale work; this shows what
+ * that means for THIS company before anything is written, because "load a plan" is not a sentence
+ * anybody should have to press on trust.
+ */
+function PlanLoader({data,onLoad,onClose}:{data:AppData;onLoad:(next:AppData,s:PlanLoad)=>void;onClose:()=>void}){
+  // Computed, not applied. The same function does the preview and the write, so what is shown here is
+  // exactly what happens — not a second description of it that can drift.
+  const {data:next,summary}=loadPlan(data,SEPTEMBER_PLAN);
+  const blanks=data.blanks?.length?data.blanks:DEFAULT_BLANKS;
+  const skus=data.skus?.length?data.skus:DEFAULT_SKUS;
+  const totals=planTotals(SEPTEMBER_PLAN,blanks,data.settings.machines?.length?data.settings.machines:DEFAULT_MACHINES);
+  return <div className="overlay" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}>
+    <div className="modal wide-modal">
+      <button className="close" onClick={onClose} aria-label="Close">×</button>
+      <p className="eyebrow">September production tracker</p>
+      <h2>Load the September plan</h2>
+      <p className="intro">{summary.days} days, {fmtDue(summary.from)} to {fmtDue(summary.to)} — the container intake, the emergency LTL on the 11th, Wholesale #1 on the 16th, and the October FTL on the 30th.</p>
+
+      <div className="recap four" style={{marginTop:16}}>
+        <Kpi label="Days" value={String(summary.days)} note="Sept 8 to 30"/>
+        <Kpi label="Steps added" value={String(summary.added)} note="mould, assemble, palletize, ship"/>
+        <Kpi label="Bottles to mould" value={num(totals.totalUnits)} note={blanks.filter(b=>totals.blankLoad[b.id]).map(b=>`${num(totals.blankLoad[b.id])} ${b.name.toLowerCase()}`).join(" · ")}/>
+        <Kpi label="Kept as they are" value={String(summary.kept.length+summary.keptWholesale)} note={`${summary.kept.length} already under way · ${summary.keptWholesale} wholesale`}/>
+      </div>
+
+      {summary.kept.length>0&&<article className="panel" style={{marginTop:14}}>
+        <h3>These are not touched</h3>
+        <p className="hint">A run was raised from them, or the floor has already recorded against them. The plan is loaded around them.</p>
+        <ul className="plan-kept">
+          {summary.kept.slice(0,8).map(st=><li key={st.id}>
+            <b>{stepTargetName(st,blanks,skus)}</b>
+            <span>{TYPE_LABEL[st.type]} · {num(st.qty)}{st.workOrderId?` · run ${st.workOrderId}`:""}{st.actualQty?` · ${num(st.actualQty)} recorded`:""}</span>
+          </li>)}
+          {summary.kept.length>8&&<li>and {summary.kept.length-8} more</li>}
+        </ul>
+      </article>}
+
+      {summary.removed.length>0&&<p className="form-error" style={{marginTop:14}}>
+        {summary.removed.length} planned step{summary.removed.length===1?"":"s"} between those dates {summary.removed.length===1?"is":"are"} taken off — the September plan has nothing on {summary.removed.length===1?"that day":"those days"}. Nothing had been started on {summary.removed.length===1?"it":"them"}.
+      </p>}
+
+      <div className="button-row" style={{marginTop:18}}>
+        <button className="cancel" onClick={onClose}>Cancel</button>
+        <button className="primary" onClick={()=>onLoad(next,summary)}>Load {summary.added} steps onto the calendar</button>
+      </div>
     </div>
   </div>;
 }

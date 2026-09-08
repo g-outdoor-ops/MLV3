@@ -449,45 +449,102 @@ export const DEFAULT_MACHINES:Machine[]=[
 // working day, screw-top necks first so the single 5-gallon mould change falls over a weekend, then
 // assembly, palletizing and the FBA shipment. Every step here is Amazon replenishment; wholesale
 // work lands on the same two machines and is added to these days as orders are taken.
-const ms=(id:string,date:string,target:string,qty:number,machineId:string):{date:string;step:ProdStep}=>
-  ({date,step:{id,type:"mold",source:"amazon",target,qty,machineId}});
-const as=(id:string,date:string,target:string,qty:number,type:ProdStep["type"]):{date:string;step:ProdStep}=>
-  ({date,step:{id,type,source:"amazon",target,qty,...(type==="ship"?{linkedTo:"FBA-SEP"}:{})}});
+const ms=(id:string,date:string,target:string,qty:number,machineId:string,order?:string):{date:string;step:ProdStep}=>
+  ({date,step:{id,type:"mold",source:order?"wholesale":"amazon",target,qty,machineId,...(order?{linkedTo:order}:{})}});
+const as=(id:string,date:string,target:string,qty:number,type:ProdStep["type"],order?:string):{date:string;step:ProdStep}=>
+  ({date,step:{id,type,source:order?"wholesale":"amazon",target,qty,...(order?{linkedTo:order}:{})}});
+// September has two shipments — the emergency LTL on the 11th and the October FTL on the 30th — so a
+// ship step says which one it is on rather than all of them sharing a single name.
+const sh=(id:string,date:string,target:string,qty:number,linkedTo:string):{date:string;step:ProdStep}=>
+  ({date,step:{id,type:"ship",source:"amazon",target,qty,linkedTo}});
 
 const SEPTEMBER_STEPS:{date:string;step:ProdStep}[]=[
-  // 5-gallon line — screw-top first (2,176), then the regular neck (1,440). 8 shifts in all.
-  ms("ps-m1","2026-09-07","b-s5",500,"m5"),ms("ps-m2","2026-09-08","b-s5",500,"m5"),
-  ms("ps-m3","2026-09-09","b-s5",500,"m5"),ms("ps-m4","2026-09-10","b-s5",500,"m5"),
-  ms("ps-m5","2026-09-11","b-s5",176,"m5"),
-  ms("ps-m6","2026-09-14","b-r5",500,"m5"),ms("ps-m7","2026-09-15","b-r5",500,"m5"),
-  ms("ps-m8","2026-09-16","b-r5",440,"m5"),
-  // 3-gallon line — 1,320 screw-top, 3 shifts, running alongside the 5-gallon line.
-  ms("ps-m9","2026-09-07","b-s3",500,"m3"),ms("ps-m10","2026-09-08","b-s3",500,"m3"),
-  ms("ps-m11","2026-09-09","b-s3",320,"m3"),
-  // Assembly — caps and boxing. GO is bottle-only but still gets labelled and boxed.
-  as("ps-a1","2026-09-10","MI-89OO-OBNM",1320,"assemble"),
-  as("ps-a2","2026-09-15","D5-T0WT-Q5XP",2176,"assemble"),
-  as("ps-a3","2026-09-17","GO-WAAU-08PA",704,"assemble"),
-  as("ps-a4","2026-09-17","BV-B81Q-X4UN",288,"assemble"),
-  as("ps-a5","2026-09-18","MV-1AA8-B2UV",448,"assemble"),
-  // Pallets, then the shipment.
-  as("ps-p1","2026-09-21","D5-T0WT-Q5XP",2176,"palletize"),
-  as("ps-p2","2026-09-21","MI-89OO-OBNM",1320,"palletize"),
-  as("ps-p3","2026-09-22","GO-WAAU-08PA",704,"palletize"),
-  as("ps-p4","2026-09-22","BV-B81Q-X4UN",288,"palletize"),
-  as("ps-p5","2026-09-22","MV-1AA8-B2UV",448,"palletize"),
-  as("ps-s1","2026-09-23","D5-T0WT-Q5XP",2176,"ship"),
-  as("ps-s2","2026-09-23","MI-89OO-OBNM",1320,"ship"),
-  as("ps-s3","2026-09-23","GO-WAAU-08PA",704,"ship"),
-  as("ps-s4","2026-09-23","BV-B81Q-X4UN",288,"ship"),
-  as("ps-s5","2026-09-23","MV-1AA8-B2UV",448,"ship"),
+  // Week 1 — the LTL. MI is stocked out at GA, so the 3-gallon screw neck moulds first and the whole
+  // week is built around Friday's pickup.
+  ms("ps-0909a","2026-09-09","b-s3",300,"m3"),
+  as("ps-0909b","2026-09-09","MI-89OO-OBNM",300,"assemble"),
+  ms("ps-0910a","2026-09-10","b-s3",300,"m3"),ms("ps-0910b","2026-09-10","b-r5",160,"m5"),
+  as("ps-0910c","2026-09-10","MI-89OO-OBNM",300,"assemble"),
+  as("ps-0910d","2026-09-10","MV-1AA8-B2UV",160,"assemble"),
+  ms("ps-0911a","2026-09-11","b-s5",480,"m5"),
+  as("ps-0911b","2026-09-11","D5-T0WT-Q5XP",480,"assemble"),
+  as("ps-0911c","2026-09-11","MI-89OO-OBNM",600,"palletize"),
+  as("ps-0911d","2026-09-11","D5-T0WT-Q5XP",480,"palletize"),
+  as("ps-0911e","2026-09-11","MV-1AA8-B2UV",160,"palletize"),
+  sh("ps-0911f","2026-09-11","MI-89OO-OBNM",600,"LTL-SEP11"),
+  sh("ps-0911g","2026-09-11","D5-T0WT-Q5XP",480,"LTL-SEP11"),
+  sh("ps-0911h","2026-09-11","MV-1AA8-B2UV",160,"LTL-SEP11"),
+  // Wholesale #1 — 640 D5 for a customer truck on the 16th, a hard date.
+  ms("ps-0912a","2026-09-12","b-s5",200,"m5"),
+  as("ps-0912b","2026-09-12","D5-T0WT-Q5XP",200,"assemble"),
+  ms("ps-0914a","2026-09-14","b-s5",220,"m5"),
+  as("ps-0914b","2026-09-14","D5-T0WT-Q5XP",220,"assemble"),
+  ms("ps-0915a","2026-09-15","b-s5",220,"m5"),
+  as("ps-0915b","2026-09-15","D5-T0WT-Q5XP",220,"assemble"),
+  as("ps-0915c","2026-09-15","D5-T0WT-Q5XP",640,"palletize"),
+  sh("ps-0916a","2026-09-16","D5-T0WT-Q5XP",640,"WHOLESALE-1"),
+  // Weeks 2 to 4 — building the October FTL, 2,640 units on 24 pallets.
+  ms("ps-0917a","2026-09-17","b-s5",288,"m5"),
+  as("ps-0917b","2026-09-17","D5-T0WT-Q5XP",288,"assemble"),
+  ms("ps-0918a","2026-09-18","b-s5",288,"m5"),
+  as("ps-0918c","2026-09-18","D5-T0WT-Q5XP",288,"assemble"),
+  // Wholesale #2 — 96 plain 5-gallon, one pallet, collected by the customer on the 18th.
+  ms("ps-0918b","2026-09-18","b-r5",96,"m5","WHOLESALE-2"),
+  as("ps-0918d","2026-09-18","GO-WAAU-08PA",96,"assemble","WHOLESALE-2"),
+  as("ps-0918e","2026-09-18","GO-WAAU-08PA",96,"palletize","WHOLESALE-2"),
+  as("ps-0918f","2026-09-18","GO-WAAU-08PA",96,"ship","WHOLESALE-2"),
+  ms("ps-0919a","2026-09-19","b-s5",288,"m5"),
+  as("ps-0919b","2026-09-19","D5-T0WT-Q5XP",288,"assemble"),
+  ms("ps-0921a","2026-09-21","b-s5",192,"m5"),ms("ps-0921b","2026-09-21","b-s3",180,"m3"),
+  as("ps-0921c","2026-09-21","D5-T0WT-Q5XP",192,"assemble"),
+  as("ps-0921d","2026-09-21","MI-89OO-OBNM",180,"assemble"),
+  // 540 against a 500 shift. The tracker calls this the heaviest 3-gal day; it is left as it stands so
+  // the calendar's capacity warning fires on it rather than the number being quietly trimmed to fit.
+  ms("ps-0922a","2026-09-22","b-s3",540,"m3"),
+  as("ps-0922b","2026-09-22","MI-89OO-OBNM",540,"assemble"),
+  ms("ps-0923a","2026-09-23","b-r5",288,"m5"),
+  as("ps-0923b","2026-09-23","GO-WAAU-08PA",288,"assemble"),
+  ms("ps-0924a","2026-09-24","b-r5",288,"m5"),
+  as("ps-0924b","2026-09-24","BV-B81Q-X4UN",288,"assemble"),
+  ms("ps-0925a","2026-09-25","b-r5",288,"m5"),
+  as("ps-0925b","2026-09-25","MV-1AA8-B2UV",288,"assemble"),
+  // Wholesale #3 — 320 plain 5-gallon with no due date, so it is made but not shipped. The tracker
+  // names it the first thing to push to October if the month runs short, and leaving it unshipped is
+  // what makes that visible rather than burying it in a shipment total.
+  ms("ps-0926a","2026-09-26","b-r5",320,"m5","WHOLESALE-3"),
+  as("ps-0926b","2026-09-26","GO-WAAU-08PA",320,"assemble","WHOLESALE-3"),
+  as("ps-0929a","2026-09-29","D5-T0WT-Q5XP",1056,"palletize"),
+  as("ps-0929b","2026-09-29","MI-89OO-OBNM",720,"palletize"),
+  as("ps-0929c","2026-09-29","GO-WAAU-08PA",288,"palletize"),
+  as("ps-0929d","2026-09-29","BV-B81Q-X4UN",288,"palletize"),
+  as("ps-0929e","2026-09-29","MV-1AA8-B2UV",288,"palletize"),
+  sh("ps-0930a","2026-09-30","D5-T0WT-Q5XP",1056,"FTL-OCT"),
+  sh("ps-0930b","2026-09-30","MI-89OO-OBNM",720,"FTL-OCT"),
+  sh("ps-0930c","2026-09-30","GO-WAAU-08PA",288,"FTL-OCT"),
+  sh("ps-0930d","2026-09-30","BV-B81Q-X4UN",288,"FTL-OCT"),
+  sh("ps-0930e","2026-09-30","MV-1AA8-B2UV",288,"FTL-OCT"),
 ];
+// The tracker's own day headings. Its checkpoints that are not production — the container landing,
+// restoring the Amazon controls, pulling the Flowspace report, the FTL count — are days here rather
+// than steps: this calendar schedules machines, and a step that occupies no machine and makes nothing
+// would sit in the capacity maths as a zero. They are on the day they belong to, where the floor and
+// the owner both read them.
 const DAY_LABELS:Record<string,{forWhat?:string;milestone?:boolean}>={
-  "2026-09-07":{forWhat:"Screw-top run starts — both lines"},
-  "2026-09-11":{forWhat:"Screw-top 5-gal finishes"},
-  "2026-09-14":{forWhat:"Mould change — regular 5-gal neck"},
-  "2026-09-16":{forWhat:"Moulding complete for the month"},
-  "2026-09-23":{forWhat:"Amazon FBA shipment leaves",milestone:true},
+  "2026-09-08":{forWhat:"Container intake — unload and stage, screw-top 3-gal to the front",milestone:true},
+  "2026-09-09":{forWhat:"For the LTL on Friday"},
+  "2026-09-10":{forWhat:"For the LTL on Friday — two blank types, mould change mid-shift"},
+  "2026-09-11":{forWhat:"LTL ships today — 1,240 units, 12 pallets, $807",milestone:true},
+  "2026-09-12":{forWhat:"LTL lands at GA · restore Amazon controls — drop the D5 handling extension, lift the MI 2-unit limit",milestone:true},
+  "2026-09-14":{forWhat:"For Wholesale #1"},
+  "2026-09-15":{forWhat:"Wholesale #1 due tomorrow"},
+  "2026-09-16":{forWhat:"Wholesale #1 customer pickup — hard date",milestone:true},
+  "2026-09-17":{forWhat:"FTL build begins"},
+  "2026-09-18":{forWhat:"FTL · Wholesale #2 if the date is confirmed"},
+  "2026-09-21":{forWhat:"Inventory checkpoint — pull Flowspace. Under 10 days on D5 or MI, book a second LTL for Friday",milestone:true},
+  "2026-09-26":{forWhat:"Wholesale #3 — only if the capacity is there, otherwise defer to October"},
+  "2026-09-28":{forWhat:"Buffer — catch up any shortfall before staging"},
+  "2026-09-29":{forWhat:"Stage the FTL — 24 pallets, verify 2,640 against the manifest"},
+  "2026-09-30":{forWhat:"FTL must depart Wednesday — a Thursday slip leaves BV at zero",milestone:true},
 };
 
 /** Group loose steps into days, newest date last, keeping any labels the day carries. */
@@ -497,6 +554,10 @@ export function buildPlan(entries:{date:string;step:ProdStep}[],labels:Record<st
     if(!byDate.has(date))byDate.set(date,{date,...(labels[date]||{}),steps:[]});
     byDate.get(date)!.steps.push(step);
   }
+  // A day with no machine on it is still a day: the container landing and the catch-up buffer carry no
+  // step, and dropping them would take two days out of the middle of the month with nothing said.
+  for(const date of Object.keys(labels))
+    if(!byDate.has(date))byDate.set(date,{date,...labels[date],steps:[]});
   return [...byDate.values()].sort((a,b)=>a.date.localeCompare(b.date));
 }
 export const SEPTEMBER_PLAN:ProdDay[]=buildPlan(SEPTEMBER_STEPS,DAY_LABELS);
@@ -515,7 +576,9 @@ const DEMO_WHOLESALE:{date:string;step:ProdStep}[]=[
 export const demoPlan=():ProdDay[]=>buildPlan([
   // ps-m1 is being run as WO-121 — the plan shows what the floor recorded against that run rather than
   // keeping a second figure of its own. ps-m2 is the next day of the same run.
-  ...SEPTEMBER_STEPS.map(e=>({...e,step:{...e.step,...(e.step.id==="ps-m1"||e.step.id==="ps-m2"?{workOrderId:"WO-121"}:{})}})),
+  // ps-0911a is being run as WO-121 — the plan shows what the floor recorded against that run rather
+  // than keeping a second figure of its own. ps-0912a is the next day of the same run.
+  ...SEPTEMBER_STEPS.map(e=>({...e,step:{...e.step,...(e.step.id==="ps-0911a"||e.step.id==="ps-0912a"?{workOrderId:"WO-121"}:{})}})),
   ...DEMO_WHOLESALE],DAY_LABELS);
 
 export type ShipMethod={id:string;name:string;sub:string;rate:number;perCase?:number;custom?:boolean};
@@ -606,7 +669,7 @@ export const demoData:AppData={
    purpose:"Palm Aqua Delivery order",line:"Assembly",days:1,qcResult:"pass"},
   // Raised from the September plan: it carries the 7th and 8th of the screw-top 5-gal run, and it is
   // the only record of what those two days made.
-  {id:"WO-121",item:"5-Gallon Bottle · 2 caps",quantity:1000,good:620,scrap:14,packed:0,date:"2026-09-07",status:"Running",jobStage:JOB_PRODUCTION,operator:"James",startedAt:new Date(Date.now()-208*60000).toISOString(),
+  {id:"WO-121",item:"5-Gallon Bottle · 2 caps",quantity:680,good:620,scrap:14,packed:0,date:"2026-09-11",status:"Running",jobStage:JOB_PRODUCTION,operator:"James",startedAt:new Date(Date.now()-208*60000).toISOString(),
    dueAt:new Date(new Date().setHours(14,0,0,0)).toISOString(),purpose:"Amazon replenishment",line:"Line 1",days:2},
  ],
  calendar:[],
@@ -776,6 +839,57 @@ export type ProdStep={
 export type ProdDay={date:string;forWhat?:string;milestone?:boolean;steps:ProdStep[]};
 
 export const stepStarted=(st:ProdStep)=>!!(st.done||(st.actualQty??0)>0);
+
+/**
+ * Load a published plan onto the calendar a company is already running.
+ *
+ * A month's plan is written once and then lived in: the floor records against it, runs get raised from
+ * it, and wholesale orders land on the same two machines. So this is a merge, not an overwrite. Three
+ * things are never touched:
+ *
+ *   · a step the floor has started or finished — those bottles physically exist,
+ *   · a step a run was raised from — the run is the record, and orphaning it loses what was made,
+ *   · wholesale work — it came from a customer order, not from this plan.
+ *
+ * Everything else inside the plan's own date window is replaced, and days outside it are left alone.
+ * The summary says exactly what happened so it can be shown before it is agreed to, rather than after.
+ */
+export type PlanLoad={days:number;added:number;removed:ProdStep[];kept:ProdStep[];keptWholesale:number;from:string;to:string};
+export function loadPlan(data:AppData,plan:ProdDay[]):{data:AppData;summary:PlanLoad}{
+  const dates=plan.map(d=>d.date).sort();
+  const from=dates[0]||"",to=dates[dates.length-1]||"";
+  const existing=data.prodDays||[];
+  const incoming=new Map(plan.map(d=>[d.date,d]));
+  const kept:ProdStep[]=[];const removed:ProdStep[]=[];let keptWholesale=0,added=0;
+  // A step the incoming plan also has is not lost, it is refreshed — counting those as removals turned
+  // a second load of the same month into a warning about 48 steps disappearing. Only a step the plan
+  // has nothing to say about actually goes.
+  const incomingIds=new Set(plan.flatMap(d=>d.steps||[]).map(s=>s.id));
+  const protect=(s:ProdStep)=>{
+    if(s.source==="wholesale"){keptWholesale++;return true}
+    if(stepStarted(s)||s.workOrderId){kept.push(s);return true}
+    if(!incomingIds.has(s.id))removed.push(s);
+    return false;
+  };
+  const out:ProdDay[]=existing.filter(d=>!from||d.date<from||d.date>to);
+  for(const [date,day] of incoming){
+    const was=existing.find(d=>d.date===date);
+    const held=(was?.steps||[]).filter(protect);
+    const fresh=(day.steps||[]).filter(s=>!held.some(k=>k.id===s.id));
+    added+=fresh.length;
+    out.push({date,forWhat:day.forWhat,milestone:day.milestone,steps:[...held,...fresh]});
+  }
+  // A day inside the window the new plan says nothing about. Whatever is protected on it stays; if that
+  // leaves nothing, the day goes, because an empty day on a calendar reads as a day off.
+  for(const d of existing){
+    if(!from||d.date<from||d.date>to||incoming.has(d.date))continue;
+    const held=(d.steps||[]).filter(protect);
+    if(held.length)out.push({...d,steps:held});
+  }
+  out.sort((a,b)=>a.date.localeCompare(b.date));
+  return {data:{...data,prodDays:out},
+    summary:{days:plan.length,added,removed,kept,keptWholesale,from,to}};
+}
 
 /**
  * Whether an edit to a planned step needs confirming first.

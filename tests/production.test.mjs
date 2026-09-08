@@ -124,15 +124,29 @@ const nonMould={date:"d",steps:[{id:"p",type:"assemble",source:"amazon",target:"
 t("assembly does not occupy a machine",dayLoad(nonMould,BLANKS,MACHINES).every(l=>l.units===0));
 
 // ---------------------------------------------------------------------------
-// The seeded September plan, read out of the source it ships in. The plan is derived from the
-// tracker, so it has to keep reproducing the tracker's own totals.
-console.log("\nThe seeded September plan still matches the tracker:");
+// The September plan, read as the app builds it rather than scraped out of the source text. It is a
+// transcription of the tracker artifact — the container intake, the emergency LTL on the 11th,
+// Wholesale #1 on the 16th, the October FTL on the 30th — so it has to keep reproducing the tracker's
+// own totals to the unit. A regex over the file used to stand in for this and quietly stopped seeing
+// steps the moment the plan grew a third helper.
+console.log("\nThe September plan still matches the tracker:");
+// The suite loads the module here rather than waiting for the shared import further down, because the
+// plan is the subject of this block and reading it out of the file with a regex — which is what this
+// used to do — stopped seeing steps the moment the plan grew a third helper.
 const { readFileSync } = await import("node:fs");
-const src=readFileSync(new URL("../app/app-data.ts",import.meta.url),"utf8");
-const parse=(fn)=>[...src.matchAll(new RegExp(fn+'\\("([^"]+)","([^"]+)","([^"]+)",(\\d+),"([^"]+)"\\)',"g"))]
-  .map(m=>({id:m[1],date:m[2],target:m[3],qty:Number(m[4]),last:m[5]}));
-const moulds=parse("ms"),rest=parse("as");
+const planMod=await import("../app/app-data.ts").catch(()=>null);
+if(!planMod)t("the app module can be imported","needs Node 22.18+");
+const {SEPTEMBER_PLAN}=planMod||{SEPTEMBER_PLAN:[]};
+const planSteps=SEPTEMBER_PLAN.flatMap(d=>d.steps.map(s=>({...s,date:d.date,last:s.type})));
+const moulds=planSteps.filter(s=>s.type==="mold"),rest=planSteps.filter(s=>s.type!=="mold");
 t("the plan is in the source",moulds.length>0&&rest.length>0,`${moulds.length} mould, ${rest.length} other`);
+t("it covers the tracker's 20 days",SEPTEMBER_PLAN.length===20,`${SEPTEMBER_PLAN.length}`);
+t("from the container landing to the FTL leaving",
+  SEPTEMBER_PLAN[0].date==="2026-09-08"&&SEPTEMBER_PLAN[19].date==="2026-09-30",
+  `${SEPTEMBER_PLAN[0].date} to ${SEPTEMBER_PLAN[19].date}`);
+// Two days carry no machine — the container landing and the catch-up buffer — and both are still days.
+t("a day with no step is still on the calendar",
+  SEPTEMBER_PLAN.filter(d=>!d.steps.length).map(d=>d.date).join(",")==="2026-09-08,2026-09-28");
 
 const planBlank={};for(const st of moulds)planBlank[st.target]=(planBlank[st.target]||0)+st.qty;
 t("screw-top 5-gal scheduled = 2,176",planBlank["b-s5"]===2176,`${planBlank["b-s5"]}`);
@@ -146,15 +160,34 @@ const planCaps=capsNeeded(assembled,SKUS);
 t("assembly consumes the tracker's 6,992 screw caps",planCaps["Screw cap"]===6992,`${planCaps["Screw cap"]}`);
 t("assembly consumes the tracker's 1,024 silicone caps",planCaps["Silicone cap"]===1024,`${planCaps["Silicone cap"]}`);
 const shipped=rest.filter(x=>x.last==="ship").reduce((a,x)=>a+x.qty,0);
-t("everything assembled is shipped",shipped===assembled.reduce((a,x)=>a+x.qty,0),`${shipped}`);
+const madeTotal=assembled.reduce((a,x)=>a+x.qty,0);
+// Not everything made this month leaves it. Wholesale #3 is 320 plain 5-gallon with no due date — the
+// tracker names it the first thing to push to October — so it is made and not shipped, deliberately.
+t("everything made is shipped except the one order with no date",shipped===madeTotal-320,`${shipped} of ${madeTotal}`);
+t("and that remainder is Wholesale #3",
+  rest.filter(x=>x.linkedTo==="WHOLESALE-3"&&x.type==="assemble").reduce((a,x)=>a+x.qty,0)===320);
+t("nothing else is left unshipped",!rest.some(x=>x.type==="assemble"&&x.source==="wholesale"
+  &&x.linkedTo!=="WHOLESALE-3"&&!rest.some(y=>y.type==="ship"&&y.linkedTo===x.linkedTo)));
+// Both shipments carry exactly what the tracker's manifests say.
+const byShipment={};for(const x of rest.filter(x=>x.type==="ship"))byShipment[x.linkedTo]=(byShipment[x.linkedTo]||0)+x.qty;
+t("the emergency LTL is 1,240 units",byShipment["LTL-SEP11"]===1240,`${byShipment["LTL-SEP11"]}`);
+t("Wholesale #1 is 640",byShipment["WHOLESALE-1"]===640,`${byShipment["WHOLESALE-1"]}`);
+t("the October FTL is 2,640",byShipment["FTL-OCT"]===2640,`${byShipment["FTL-OCT"]}`);
 
-console.log("\nNo scheduled day is over capacity as seeded:");
-const byDate={};
-for(const st of moulds)(byDate[st.date]||=[]).push({...st,type:"mold",source:"amazon"});
-const overs=Object.entries(byDate).filter(([date,steps])=>dayLoad({date,steps},BLANKS,MACHINES).some(l=>l.over>0));
-t("the Amazon plan fits the machines it is laid on",overs.length===0,overs.map(o=>o[0]).join(", "));
-t("moulding is spread over 8 five-gallon days",new Set(moulds.filter(x=>x.target!=="b-s3").map(x=>x.date)).size===8);
-t("and 3 three-gallon days",new Set(moulds.filter(x=>x.target==="b-s3").map(x=>x.date)).size===3);
+console.log("\nThe month is laid out as the tracker lays it out:");
+const overs=SEPTEMBER_PLAN.filter(d=>dayLoad(d,BLANKS,MACHINES).some(l=>l.over>0)).map(d=>d.date);
+// The tracker calls Sept 22 the heaviest 3-gal day and puts 540 on a 500 shift. It is left as it
+// stands, because a plan quietly trimmed to fit is a plan nobody argues with — the calendar's own
+// capacity warning is supposed to fire here.
+t("exactly one day is over capacity",overs.length===1,overs.join(", "));
+t("and it is the tracker's 540-bottle day",overs[0]==="2026-09-22",`${overs[0]}`);
+t("the 5-gallon line runs 13 days",new Set(moulds.filter(x=>x.machineId==="m5").map(x=>x.date)).size===13,
+  `${new Set(moulds.filter(x=>x.machineId==="m5").map(x=>x.date)).size}`);
+t("the 3-gallon line runs 4",new Set(moulds.filter(x=>x.machineId==="m3").map(x=>x.date)).size===4,
+  `${new Set(moulds.filter(x=>x.machineId==="m3").map(x=>x.date)).size}`);
+// MI is stocked out at GA, so the 3-gallon screw neck is the first thing on a machine.
+t("MI moulds first, because it is the one that is out",moulds[0].target==="b-s3"&&moulds[0].date==="2026-09-09",
+  `${moulds[0].target} ${moulds[0].date}`);
 
 // ---------------------------------------------------------------------------
 console.log("\nRecording vs reconciling stay distinct:");
@@ -227,19 +260,32 @@ const dataBig=withOrders(big);
 const plan=planOrder(big,dataBig,"2026-09-07");
 const moulds=plan.entries.filter(e=>e.step.type==="mold");
 t("every bottle short is scheduled",moulds.reduce((a,e)=>a+e.step.qty,0)===1588,`${moulds.reduce((a,e)=>a+e.step.qty,0)}`);
-// Sep 7-10 are full of Amazon screw-top work; the 11th has 176 on it, so 324 is what is left.
-t("it starts on the first day with room, not the first day",moulds[0].date==="2026-09-11"&&moulds[0].step.qty===324,`${moulds[0].date} ${moulds[0].step.qty}`);
-t("it steps over days the Amazon plan already fills",!moulds.some(e=>e.date==="2026-09-14"||e.date==="2026-09-15"));
+// The tracker's month starts on the 8th, so the 7th is free and takes a full shift. What matters is
+// what happens after that: the 8th is already full at 500, and the scheduler steps over it rather than
+// stacking a second run on the same line.
+t("it starts on the first day with room",moulds[0].date==="2026-09-07"&&moulds[0].step.qty===500,`${moulds[0].date} ${moulds[0].step.qty}`);
+t("it steps over the day the plan already fills",!moulds.some(e=>e.date==="2026-09-08"));
+// 160 booked on the 10th, 480 on the 11th, 220 on the 14th — it fills each to 500 and no further.
+t("it fills each day to what is left on it, not past it",
+  moulds.map(e=>`${e.date}:${e.step.qty}`).join(" ")==="2026-09-07:500 2026-09-09:500 2026-09-10:340 2026-09-11:20 2026-09-14:228",
+  moulds.map(e=>`${e.date}:${e.step.qty}`).join(" "));
 t("nothing is scheduled on a weekend",plan.entries.every(e=>isWorkday(e.date)));
 const after=addSteps(dataBig.prodDays,plan.entries);
 const overs=after.filter(d=>dayLoad(d,DEFAULT_BLANKS,DEFAULT_MACHINES).some(l=>l.over>0)).map(d=>d.date);
-// The demo's own 8th is over before this runs; planning must not add a second one.
-t("planning an order never overbooks a line",overs.length===1&&overs[0]==="2026-09-08",overs.join(", "));
+// The tracker's own 22nd is over before this runs — 540 on a 500 shift — and planning must not add a
+// second one.
+t("planning an order never overbooks a line",overs.length===1&&overs[0]==="2026-09-22",overs.join(", "));
 t("the assembly follows the last bottle off the machine",plan.entries.find(e=>e.step.type==="assemble").date>moulds[moulds.length-1].date);
 t("shipping is last",plan.finish===plan.entries[plan.entries.length-1].date);
 
 console.log("\nThe date already promised is checked against the machines:");
-t("a month that cannot be made by the date needed says so",plan.daysLate===6,`${plan.daysLate}`);
+// This one fits: 1,588 bottles into the gaps the tracker's month leaves, finishing the day before it
+// is due. The check that matters is that a date which does NOT fit is reported rather than promised.
+t("an order that fits is not reported late",plan.daysLate===null&&plan.finish==="2026-09-17",`${plan.finish} / ${plan.daysLate}`);
+const tight=order({id:"SO-TIGHT",lines:[{item:"5-Gallon Bottle · 2 caps",quantity:2000,rate:9.4}],quantity:2000,due:"2026-09-11"});
+const tightPlan=planOrder(tight,withOrders(tight),"2026-09-07");
+t("a month that cannot be made by the date needed says so",tightPlan.daysLate>0,`${tightPlan.daysLate}`);
+t("and says by how many days",tightPlan.daysLate===6,`${tightPlan.daysLate}`);
 const roomy=planOrder(order({id:"SO-ROOM",lines:[{item:"5-Gallon Bottle · 2 caps",quantity:300,rate:9.4}],quantity:300,due:"2026-09-30"}),base,"2026-09-07");
 t("an order that fits is not flagged",roomy.daysLate===null);
 t("an order the shelf covers skips straight to packing",roomy.entries.every(e=>e.step.type!=="mold")&&roomy.entries.length===2,roomy.entries.map(e=>e.step.type).join(","));
@@ -273,18 +319,18 @@ const runs=d.workOrders;
 const byId=id=>all.find(s=>s.id===id);
 
 console.log("\nA step being run reads its numbers off the run:");
-const linked=byId("ps-m1");
+const linked=byId("ps-0911a");
 t("the demo step is linked to a run",linked.workOrderId==="WO-121");
 const run=runs.find(w=>w.id==="WO-121");
-// WO-121 covers the 7th (500) and the 8th (500) and has made 620: the first day is full, the second
-// has 120 on it. That is how a run over two days actually progresses.
-t("the first day of the run is full",stepProgress(linked,runs,all).made===500,`${stepProgress(linked,runs,all).made}`);
-t("the balance lands on the second day",stepProgress(byId("ps-m2"),runs,all).made===120,`${stepProgress(byId("ps-m2"),runs,all).made}`);
+// WO-121 covers the 11th (480) and the 12th (200) and has made 620: the first day is full, the second
+// has 140 on it. That is how a run over two days actually progresses.
+t("the first day of the run is full",stepProgress(linked,runs,all).made===480,`${stepProgress(linked,runs,all).made}`);
+t("the balance lands on the second day",stepProgress(byId("ps-0912a"),runs,all).made===140,`${stepProgress(byId("ps-0912a"),runs,all).made}`);
 t("no day is credited with more than it planned",stepProgress(linked,runs,all).made<=linked.qty);
 t("the two days add up to what the run made",
-  stepProgress(linked,runs,all).made+stepProgress(byId("ps-m2"),runs,all).made===run.good);
+  stepProgress(linked,runs,all).made+stepProgress(byId("ps-0912a"),runs,all).made===run.good);
 t("the finished day is done",stepProgress(linked,runs,all).done===true);
-t("the day still being made is not",stepProgress(byId("ps-m2"),runs,all).done===false);
+t("the day still being made is not",stepProgress(byId("ps-0912a"),runs,all).done===false);
 // Scrap is not split across days — nobody knows which shift it happened on, so it stays on the run.
 t("scrap is reported against the run, not guessed at per day",stepProgress(linked,runs,all).scrap===0&&stepProgress(linked,runs,all).runScrap===14);
 t("the step names the run that owns it",stepProgress(linked,runs,all).runId==="WO-121");
@@ -295,28 +341,87 @@ t("its own figure is used",stepProgress(loose,runs,all).made===180);
 t("and it is not marked done early",stepProgress(loose,runs,all).done===false);
 
 console.log("\nCapacity counts the run's work, not a stale copy of it:");
-// Before the fix the 7th read as untouched, because the plan's own actualQty was never written.
-const seventh=d.prodDays.find(x=>x.date==="2026-09-07");
-const load=dayLoad(seventh,DEFAULT_BLANKS,DEFAULT_MACHINES,runs,all);
-t("the day is still measured against the machine",load.find(l=>l.machine.makes==="5-gal").units===500);
-t("a part-made day keeps its planned load",stepLoad(byId("ps-m2"),runs,all)===500);
+// Before the fix the run's first day read as untouched, because the plan's own actualQty was never
+// written — the number lived on the run and the calendar never asked it.
+const runDay=d.prodDays.find(x=>x.date==="2026-09-11");
+const load=dayLoad(runDay,DEFAULT_BLANKS,DEFAULT_MACHINES,runs,all);
+t("the day is still measured against the machine",load.find(l=>l.machine.makes==="5-gal").units===480,
+  `${load.find(l=>l.machine.makes==="5-gal").units}`);
+t("a part-made day keeps its planned load",stepLoad(byId("ps-0912a"),runs,all)===200,`${stepLoad(byId("ps-0912a"),runs,all)}`);
 t("the month total is unchanged by who is recording it",planTotals(d.prodDays,DEFAULT_BLANKS,DEFAULT_MACHINES,runs).totalUnits===5556,
   `${planTotals(d.prodDays,DEFAULT_BLANKS,DEFAULT_MACHINES,runs).totalUnits}`);
 
+// ---------------------------------------------------------------------------
+// Loading the published month onto a calendar somebody is already working from. The whole value of
+// this app is that the plan and the floor hold one number, so a load that overwrites a started step
+// would destroy the thing it exists to protect.
+console.log("\nLoading the September plan onto a calendar in use:");
+const {loadPlan,SEPTEMBER_PLAN:SEPT}=app;
+const live=normalize({...demoData,prodDays:[
+  // a day the plan also has, carrying one started step, one run-linked step, one wholesale step and
+  // one ordinary planned step that nothing has happened to
+  {date:"2026-09-11",forWhat:"old label",steps:[
+    {id:"old-started",type:"mold",source:"amazon",target:"b-s5",qty:400,actualQty:180},
+    {id:"old-run",type:"mold",source:"amazon",target:"b-s5",qty:300,workOrderId:"WO-777"},
+    {id:"old-ws",type:"mold",source:"wholesale",target:"b-r5",qty:250,linkedTo:"SO-9"},
+    {id:"old-idle",type:"mold",source:"amazon",target:"b-s5",qty:100}]},
+  // a day inside the window the new plan says nothing about
+  {date:"2026-09-13",steps:[{id:"orphan",type:"mold",source:"amazon",target:"b-s5",qty:60}]},
+  // a day outside it entirely
+  {date:"2026-08-20",steps:[{id:"august",type:"mold",source:"amazon",target:"b-s5",qty:70}]},
+]});
+const {data:loaded,summary}=loadPlan(live,SEPT);
+const at=(d)=>loaded.prodDays.find(x=>x.date===d);
+const ids=loaded.prodDays.flatMap(d=>d.steps).map(s=>s.id);
+t("a step the floor has recorded against is kept",ids.includes("old-started"));
+t("a step a run was raised from is kept",ids.includes("old-run"));
+t("wholesale work is kept — it came from an order, not from this plan",ids.includes("old-ws"));
+t("a planned step nothing has happened to is replaced",!ids.includes("old-idle"));
+t("both protected steps are named in the summary",summary.kept.length===2,`${summary.kept.length}`);
+t("and the wholesale one is counted separately",summary.keptWholesale===1,`${summary.keptWholesale}`);
+// Two: the idle step on the 11th, and the orphan on a day the plan does not mention. A step the new
+// plan also carries is refreshed, not removed, so loading the same month twice warns about nothing.
+t("both removals are reported",summary.removed.length===2,`${summary.removed.map(s=>s.id)}`);
+t("and they are named, not just counted",summary.removed.map(s=>s.id).sort().join(",")==="old-idle,orphan",
+  `${summary.removed.map(s=>s.id)}`);
+t("reloading the same month removes nothing",loadPlan(loaded,SEPT).summary.removed.length===0,
+  `${loadPlan(loaded,SEPT).summary.removed.map(s=>s.id)}`);
+t("the day takes the new plan's label",at("2026-09-11").forWhat!=="old label");
+t("what is kept sits alongside what is loaded",
+  at("2026-09-11").steps.some(s=>s.id==="ps-0911a")&&at("2026-09-11").steps.some(s=>s.id==="old-started"));
+t("a day outside the window is untouched",at("2026-08-20").steps[0].id==="august");
+t("an unprotected day the plan does not mention goes",!ids.includes("orphan"));
+t("the calendar is left in date order",
+  loaded.prodDays.map(d=>d.date).join("|")===[...loaded.prodDays.map(d=>d.date)].sort().join("|"));
+t("the whole month lands",summary.days===20&&summary.from==="2026-09-08"&&summary.to==="2026-09-30",
+  `${summary.days} ${summary.from}-${summary.to}`);
+// Loading it twice must not double the month.
+const twice=loadPlan(loaded,SEPT).data;
+t("loading it again does not duplicate a step",
+  new Set(twice.prodDays.flatMap(d=>d.steps).map(s=>s.id)).size===twice.prodDays.flatMap(d=>d.steps).length);
+t("and the second load has nothing left to protect",loadPlan(loaded,SEPT).summary.kept.length===2);
+// The demo company is the real case: WO-121 is mid-run against two of the plan's own days.
+const onDemo=loadPlan(normalize(demoData),SEPT);
+t("a live run is carried through a reload",
+  onDemo.data.prodDays.flatMap(d=>d.steps).some(s=>s.workOrderId==="WO-121"));
+t("and its recorded work is not lost",onDemo.summary.kept.some(s=>s.workOrderId==="WO-121"));
+
 console.log("\nRaising a run from the plan:");
-const step=byId("ps-m6");                        // regular 5-gal, 14th, unlinked
+const step=byId("ps-0923a");                     // regular 5-gal, 23rd to 25th, unlinked
 const covered=runSteps(step,d.prodDays);
-t("a run covers the days that continue it",covered.length===3&&covered[0].id==="ps-m6",`${covered.map(c=>c.id)}`);
+t("a run covers the days that continue it",covered.length===3&&covered[0].id==="ps-0923a",`${covered.map(c=>c.id)}`);
 t("and stops before a different batch",covered.every(c=>c.target===step.target));
-const work=runFromSteps(covered,d,"WO-900","2026-09-14");
-t("the run is for everything those days planned",work.quantity===1440,`${work.quantity}`);
+// The 26th is the same blank but it is Wholesale #3's, not this Amazon run's, and it is not swept in.
+t("nor across a different order's day",!covered.some(c=>c.id==="ps-0926a"));
+const work=runFromSteps(covered,d,"WO-900","2026-09-23");
+t("the run is for everything those days planned",work.quantity===864,`${work.quantity}`);
 t("it lands on the line that machine is",work.line==="Line 1",`${work.line}`);
 t("it is raised as a catalogue item the floor screens understand",
   d.itemRates.some(r=>r.item===work.item),`${work.item}`);
 t("it spans the days it covers",work.days===3,`${work.days}`);
-t("and starts where the plan put it",work.date==="2026-09-14");
+t("and starts where the plan put it",work.date==="2026-09-23");
 // A step already being run must not be swept into a second one.
-t("a step already on a run is not covered again",!runSteps(byId("ps-m1"),d.prodDays).some(x=>x.id==="ps-m2"));
+t("a step already on a run is not covered again",!runSteps(byId("ps-0911a"),d.prodDays).some(x=>x.id==="ps-0912a"));
 // Assembly raises a run of its own now (see Phase 6 below); packing and the truck do not.
 t("shipping raises no run",runFromSteps([all.find(x=>x.type==="ship")],d,"WO-901","2026-09-23")===null);
 }
@@ -449,18 +554,18 @@ const impact=runDeleteImpact(d,"WO-121");
 t("the question can say what is at stake",impact.made===620&&impact.scrap===14&&impact.steps===2,JSON.stringify(impact).slice(0,90));
 const after=deleteRun(d,"WO-121");
 t("the run is gone",!after.workOrders.some(w=>w.id==="WO-121"));
-const steps=after.prodDays.flatMap(x=>x.steps).filter(x=>x.id==="ps-m1"||x.id==="ps-m2");
+const steps=after.prodDays.flatMap(x=>x.steps).filter(x=>x.id==="ps-0911a"||x.id==="ps-0912a");
 t("its days go back to being planned work",steps.every(x=>!x.workOrderId));
 // 620 across two 500-bottle days: the first is full, the second keeps 120. The bottles exist either way.
-t("the first day keeps the 500 it was credited with",steps.find(x=>x.id==="ps-m1").actualQty===500);
-t("and the second keeps its 120",steps.find(x=>x.id==="ps-m2").actualQty===120);
-t("the finished day still reads as done",stepProgress(steps.find(x=>x.id==="ps-m1"),after.workOrders,after.prodDays.flatMap(x=>x.steps)).done===true);
-t("and the record says where those units came from",/WO-121 before it was removed/.test(steps.find(x=>x.id==="ps-m1").note||""));
+t("the first day keeps the 480 it was credited with",steps.find(x=>x.id==="ps-0911a").actualQty===480);
+t("and the second keeps its 140",steps.find(x=>x.id==="ps-0912a").actualQty===140);
+t("the finished day still reads as done",stepProgress(steps.find(x=>x.id==="ps-0911a"),after.workOrders,after.prodDays.flatMap(x=>x.steps)).done===true);
+t("and the record says where those units came from",/WO-121 before it was removed/.test(steps.find(x=>x.id==="ps-0911a").note||""));
 // A run that never produced anything just releases its days.
 const clean=normalize({...d,workOrders:d.workOrders.map(w=>w.id==="WO-121"?{...w,good:0,scrap:0}:w)});
 const afterClean=deleteRun(clean,"WO-121");
 t("a run that made nothing leaves no phantom production",
-  afterClean.prodDays.flatMap(x=>x.steps).filter(x=>x.id==="ps-m1").every(x=>x.actualQty===undefined&&!x.workOrderId));
+  afterClean.prodDays.flatMap(x=>x.steps).filter(x=>x.id==="ps-0911a").every(x=>x.actualQty===undefined&&!x.workOrderId));
 t("removing a run that does not exist changes nothing",deleteRun(d,"WO-nope").workOrders.length===d.workOrders.length);
 
 const drawer=readFileSync(new URL("../app/components/drawers.tsx",import.meta.url),"utf8");

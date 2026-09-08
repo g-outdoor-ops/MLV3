@@ -651,6 +651,43 @@ not saying it plainly.
 - **The muted greys were lifted** (`--dim`, `--faint`) — one change, every label on the screen. And a
   refusal no longer arrives wearing a green tick: error toasts are red and marked.
 
+### Phase 19 — the September tracker, as the calendar (in the tree, uncommitted)
+
+Asked for: *"update my production schedule to your schedule ... from september production tracker
+artifact ... i need my production schedule to match the schedule created to the day"*.
+
+The plan in the code was **derived** from the tracker — it reproduced its totals but laid the days out
+its own way, one shift per machine per working day. The tracker is the real month: container intake on
+the 8th, the emergency LTL on the 11th, Wholesale #1 collected on the 16th, the October FTL on the
+30th. `SEPTEMBER_STEPS` is now a transcription of it, day for day, 20 days and 54 steps.
+
+Every one of the tracker's own figures is reproduced by the plan the app builds, and the tests assert
+it against `SEPTEMBER_PLAN` rather than a regex over the source — which is what the old check did, and
+it stopped seeing steps the moment the plan grew a third helper:
+
+- 4,936 bottles to mould · 2,176 screw-top 5-gal, 1,320 screw-top 3-gal, 1,440 regular 5-gal
+- 6,992 screw caps, 1,024 silicone
+- LTL 1,240 units · Wholesale #1 640 · FTL 2,640
+- MI moulds first, because it is the one that is stocked out
+
+Two things are deliberately left as the tracker has them. **Sept 22 is over capacity** — 540 on a 500
+shift, the tracker's own heaviest 3-gal day — because a plan quietly trimmed to fit is a plan nobody
+argues with, and the calendar's capacity warning is supposed to fire there. **Wholesale #3's 320 are
+made and not shipped**: it has no due date, and the tracker names it the first thing to push to
+October. Both are asserted, so neither can be "tidied up" by accident.
+
+The tracker's checkpoints that occupy no machine — the container landing, restoring the Amazon
+controls, the Flowspace pull, the FTL count — are **day labels**, not steps. A step that makes nothing
+would sit in the capacity maths as a zero.
+
+**Loading it onto a company already running.** `loadPlan()` merges rather than overwrites. Three things
+are never touched: a step the floor has recorded against, a step a run was raised from, and wholesale
+work, which came from a customer order. Everything else inside the plan's own dates is refreshed, days
+outside it are left alone, and a step the new plan also carries counts as refreshed rather than
+removed — counting those as removals turned a second load of the same month into a warning about 48
+steps disappearing. The owner sees all of it before agreeing: the same function does the preview and
+the write, so what is shown is what happens rather than a second description that can drift.
+
 ### Still open on products
 
 - **Storage is still three arrays.** One writer keeps them in step and one view reads them, but a

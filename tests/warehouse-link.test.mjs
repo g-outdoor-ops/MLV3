@@ -144,7 +144,9 @@ t("a step being run is refused here",!!applyFloorAction(data,{op:"step.record",s
 t("and it says where the number goes instead",
   applyFloorAction(data,{op:"step.record",stepId:onRun.id,made:400,by:"Marta"}).error.includes(onRun.workOrderId));
 const shown=floorView(data).days.flatMap(d=>d.steps).find(s=>s.id===onRun.id);
-t("the tablet shows the run's figure, not the plan's",shown.actualQty===500,`${shown.actualQty}`);
+// WO-121 has made 620 across the 11th (480 planned) and the 12th (200). The tablet must show the
+// run's figure for the day, not the plan's copy of it.
+t("the tablet shows the run's figure, not the plan's",shown.actualQty===480,`${shown.actualQty}`);
 t("and names the run so the operator knows where to look",shown.workOrderId===onRun.workOrderId);
 const free=data.prodDays.flatMap(d=>d.steps).find(s=>!s.workOrderId&&!s.done);
 t("a step with no run is still recordable from the tablet",!applyFloorAction(data,{op:"step.record",stepId:free.id,made:10,by:"Marta"}).error);
