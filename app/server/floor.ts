@@ -18,7 +18,7 @@
 //     leaked link cannot reprice the catalogue or delete a customer, because there is no way to ask.
 // The .ts extension is deliberate: it is what Node's own resolver wants, so this module can be loaded
 // straight from tests/warehouse-link.test.mjs and checked as it ships rather than as a copy of itself.
-import { ASSEMBLY_LINE, HOLD_REASONS, JOB_COMPLETE, JOB_NOT_STARTED, JOB_PACKAGING, JOB_PRODUCTION, JOB_STAGES, blockJob, blockedFor, consume, dueIso, jobForecast,
+import { ASSEMBLY_LINE, HOLD_REASONS, SCRAP_REASONS, JOB_COMPLETE, JOB_NOT_STARTED, JOB_PACKAGING, JOB_PRODUCTION, JOB_STAGES, blockJob, blockedFor, consume, dueIso, jobForecast,
   jobPaused, jobPriority, jobReadiness, jobRemaining, jobStageOf, newFloorToken, packagingPhotoKey, packingPlan, packingUses, pauseJob, recordPacking, recordStep, resumeJob, setJobStage, runConsumption, stepProgress,
   type AppData, type Blank, type JobHold, type JobPriority, type Machine, type MaterialCheck, type ProdDay, type ProdStep,
   type PackingPlan, type PackingRecord, type Sku, type WorkOrder } from "../app-data.ts";
@@ -51,6 +51,7 @@ export type FloorView={
   activity:FloorEvent[];
   stations:string[];
   holdReasons:string[];
+  scrapReasons:string[];
 };
 
 const iso=(d:Date)=>d.toISOString().slice(0,10);
@@ -150,13 +151,13 @@ export function floorView(data:AppData,photos:{item:string;updatedAt:string}[]=[
       made:workOrders.reduce((a,w)=>a+w.good,0),
       target:workOrders.reduce((a,w)=>a+w.quantity,0),
     },
-    activity,stations,holdReasons:HOLD_REASONS,
+    activity,stations,holdReasons:HOLD_REASONS,scrapReasons:SCRAP_REASONS,
   };
 }
 
 export type FloorAction=
   |{op:"step.record";stepId:string;made:number;scrap?:number;by?:string}
-  |{op:"wo.progress";woId:string;good?:number;scrap?:number;by?:string}
+  |{op:"wo.progress";woId:string;good?:number;scrap?:number;note?:string;by?:string}
   |{op:"wo.status";woId:string;status:string;by?:string}
   |{op:"job.stage";woId:string;stage:number;by?:string}
   |{op:"job.pause";woId:string;by?:string}
@@ -166,9 +167,13 @@ export type FloorAction=
 
 /** The name the tablet gives is a label, not a claim — nobody signed in. Kept short and printable. */
 export const floorActor=(by?:string)=>{
-  const name=String(by||"").replace(/[^\p{L}\p{N}' .-]/gu,"").trim().slice(0,40);
+  const name=floorName(by);
   return name?`Warehouse link · ${name}`:"Warehouse link";
 };
+/** The one place a self-declared name is cleaned, so the check and the audit line agree on it. */
+export const floorName=(by?:string)=>String(by||"").replace(/[^\p{L}\p{N}' .-]/gu,"").trim().slice(0,40);
+/** Enough of a name to hold somebody to. Two characters, so initials count and a stray space does not. */
+export const NAME_MIN=2;
 
 const num=(v:unknown)=>{const n=Number(v);return Number.isFinite(n)&&n>=0?Math.floor(n):0};
 const RUN_STATUS=["Running","Paused","QC hold"];
@@ -179,7 +184,12 @@ const RUN_STATUS=["Running","Paused","QC hold"];
  */
 export function applyFloorAction(data:AppData,action:FloorAction,now=new Date().toISOString()):
   {data:AppData;summary:string;action:string}|{error:string}{
-  const by=String(action.by||"").trim().slice(0,40)||"Warehouse";
+  // Every one of these writes somebody's name into the audit log, and "Warehouse" is not somebody. It
+  // used to be the fallback, which meant the one question the log exists to answer — who recorded this
+  // — could be answered with a shrug. The tablet asks for a name before it will send anything; this is
+  // the half that cannot be skipped by rewriting the page.
+  const by=floorName(action.by);
+  if(by.length<NAME_MIN)return {error:"Sign in with your name before recording anything"};
 
   if(action.op==="step.record"){
     const day=(data.prodDays||[]).find(d=>(d.steps||[]).some(s=>s.id===action.stepId));
@@ -206,6 +216,9 @@ export function applyFloorAction(data:AppData,action:FloorAction,now=new Date().
     const good=Math.min(num(action.good),Math.max(0,wo.quantity-wo.good));
     const scrap=num(action.scrap);
     if(!good&&!scrap)return {error:"Nothing to add"};
+    // Why bottles were scrapped is the useful half of the number. It is kept on the audit line rather
+    // than on the run, because it belongs to this entry and not to the job as a whole.
+    const note=String(action.note||"").trim().slice(0,120);
     return {
       data:{...data,
         workOrders:data.workOrders.map(w=>w.id===wo.id?{...w,good:w.good+good,scrap:w.scrap+scrap}:w),
@@ -214,7 +227,7 @@ export function applyFloorAction(data:AppData,action:FloorAction,now=new Date().
         // tablet used the link instead of the app.
         inventory:good?consume(data.inventory,runConsumption(wo,data.itemRates),good):data.inventory},
       action:"floor.progress",
-      summary:`${wo.id} · +${good} good${scrap?`, +${scrap} scrap`:""} (${by})`,
+      summary:`${wo.id} · +${good} good${scrap?`, +${scrap} scrap`:""}${scrap&&note?` · ${note}`:""} (${by})`,
     };
   }
 

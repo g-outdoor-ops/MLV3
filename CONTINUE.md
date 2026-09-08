@@ -578,6 +578,79 @@ at them. What went missing was the *list* — the code had become a field on the
 showing the listings together. That is what this restores, with the barcode and pack-out detail the
 floor actually needs.
 
+### Phase 17 — the $2.2m dashboard, and two listings problems (in the tree, uncommitted)
+
+Reported from use: *"can you fix this 2 million $ bug. Ive not invoiced 2 million or net profit 2
+million"*, then *"Still cant see amazon sku items its blank and when adding a new item i cant upload
+any photo"*.
+
+**Invoiced $2,287,351 against about $27,000 of real invoices.** `documentTotal` had a comment saying an
+invoice can appear as $2.2m if a multi-line document is squashed to one line and re-multiplied — and it
+was right. The fix landed in the *code* months ago: an import now stores `total` and `lines`. It never
+landed in the *data*. The rows imported before that still hold a **summed quantity beside one line's
+rate**, no total and no lines, and the last branch of `documentTotal` cheerfully multiplied them. The
+open ones happen to look plausible; the paid ones are enormous and only revenue counts them, which is
+why the collect figure looked right while the headline did not.
+
+- An imported document with no recorded total is no longer multiplied out. There is nothing there to
+  compute from, so it is worth nothing until the books say otherwise (`totalUnrecorded`).
+- It is **quarantined from receivables too**, not just revenue — counted as receivable it subtracts
+  what was paid from a total of nothing.
+- Those invoices are **named on the Control Center** rather than silently dropped, alongside any
+  invoice whose stored total disagrees with its own lines by more than tax could explain
+  (`invoiceProblems`).
+- **The sync repairs them.** It already asked QuickBooks what each open invoice was worth and stored
+  only the amount paid; it now stores the total as well, and asks about an unrecorded invoice even when
+  it is marked paid. One sync fixes the figures; a full import also brings the line detail back.
+
+**Net profit equalling revenue exactly, at "100% margin".** COGS counted only orders raised in this
+app. An imported invoice has no order here, so it cost nothing to make. It is now costed from the order
+where there is one, otherwise from its own lines, otherwise from the single-line summary — one function
+(`invoiceCogs`) shared with the P&L, which had its own slightly different copy. A product with no unit
+cost is **reported by name** instead of counted as free: the KPI says "no unit cost on N products — this
+is revenue, not profit" rather than claiming a margin.
+
+**The Amazon list was empty while six listings existed.** `products()` built its name list from item
+rates and inventory only, so a listing that had never been priced or counted was invisible — and three
+of the six seeded listings have no catalogue name at all. Listings are now in the join, under their own
+name until a save binds them to one, carrying their code, channel and mould so production can still
+schedule them.
+
+**A new product could not take a photo.** A photo is filed under the product's name, so the button was
+disabled until the product existed — which read as "photos do not work". Naming it is now enough: the
+product is saved on the spot and the photo goes onto the record that save just created.
+
+### Phase 18 — the tablet, read at arm's length (in the tree, uncommitted)
+
+Ten things reported from standing in front of it. Almost every one is the screen knowing something and
+not saying it plainly.
+
+- **A paused job said "In Production"** with a button underneath offering to resume it. It now says
+  `PAUSED` twice — the flag at the top and a badge beside the item name — and the card turns amber.
+- **Sign-in is one line.** A full-width name field was taking a third of the screen for something
+  answered once a shift; after entry it collapses to `James · Signed in since 6:02 AM`, with *Not you?*
+- **"Needed Tue, Sep 8" made the reader work out what day it is** before knowing whether to hurry. It
+  is now `Due today at 2:00 PM`, `Due tomorrow`, `OVERDUE — was due Mon, Sep 7`, or a plain date, from
+  one `dueLabel` in the model so the tests check the words that actually ship.
+- **`no caps • 1 per case • 600 cases`** left the reader to work out which number counted what. Four
+  labelled fields now: caps per bottle, bottles per case, cases required, cases per pallet.
+- **"No · not counted" told nobody whether that was a problem.** Materials reads `Ready`,
+  `Missing 2 items` or `Not checked`, with **Check materials** opening the list — each item with what is
+  on hand against what the job needs.
+- **The 1,080 target on a job for 600.** It was every open job added together with nothing saying so.
+  It is labelled *Made · every open job* and broken down underneath: `380 left on WO-121 · 586 on 4
+  other jobs`.
+- **One "Up next" card**, not the schedule: the next job to prepare a mould and materials for, with its
+  quantity, mould and readiness. Work already made and waiting on quality is not it.
+- **Recording production is built for gloves.** Two counters with 72px −/+ targets, quick jumps, and a
+  scrap reason asked for **only once there is scrap** — `SCRAP_REASONS` comes from the server, like the
+  hold reasons, and lands on the audit line beside the count.
+- **Nothing is recorded anonymously.** `by` used to fall back to "Warehouse", so the one question the
+  audit log exists to answer could be answered with a shrug. Every verb now needs a real name; the
+  tablet asks before it sends, and the server refuses if the page is rewritten to skip it.
+- **The muted greys were lifted** (`--dim`, `--faint`) — one change, every label on the screen. And a
+  refusal no longer arrives wearing a green tick: error toasts are red and marked.
+
 ### Still open on products
 
 - **Storage is still three arrays.** One writer keeps them in step and one view reads them, but a

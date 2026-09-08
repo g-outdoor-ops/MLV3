@@ -11,6 +11,7 @@
 // on the same screen rather than somewhere else. Everything it can do still goes through /api/floor,
 // which builds every change itself; this page cannot send a company record even if someone rewrote it.
 import { useEffect, useState } from "react";
+import { dueLabel } from "../app-data";
 import type { FloorBuild, FloorView, FloorWork } from "../server/floor";
 
 const STAGE_LABEL=["Not started","In production","Ready for QC","Packaging","Ready to ship","Complete"];
@@ -18,14 +19,21 @@ const STAGE_LABEL=["Not started","In production","Ready for QC","Packaging","Rea
 const STEPPER=[{stage:1,label:"In Production"},{stage:2,label:"Quality Check"},{stage:3,label:"Packaging"},{stage:4,label:"Ready to Ship"}];
 const TABS=["Now","Today","Upcoming","Completed","Blocked"] as const;
 type Tab=typeof TABS[number];
+/** What is open under the job card. One at a time — a tablet has no room for two. */
+type Panel="record"|"instructions"|"problem"|"materials"|null;
 
 const num=(n:number)=>Math.round(n).toLocaleString("en-US");
 const clock=(iso?:string)=>iso?new Date(iso).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}):"";
-const day=(v:string)=>{
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(v||""))return v||"—";
-  return new Date(v+"T12:00:00Z").toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",timeZone:"UTC"});
-};
 const ago=(mins:number)=>mins<60?`${mins} min`:`${Math.floor(mins/60)}h ${mins%60}m`;
+/** Materials: three states, in the words the floor would use. */
+function readyState(w:FloorWork){
+  const tracked=w.ready.checks.filter(c=>c.tracked);
+  if(!w.ready.checks.length)return {label:"Nothing to check",tone:"na" as const};
+  if(!tracked.length)return {label:"Not checked",tone:"wait" as const};
+  const short=tracked.filter(c=>!c.ok);
+  if(short.length)return {label:`Missing ${short.length} item${short.length===1?"":"s"}`,tone:"stop" as const};
+  return {label:"Ready",tone:"go" as const};
+}
 
 export default function FloorLinkPage(){
   const [token]=useState<string|null>(()=>typeof window==="undefined"?null:new URLSearchParams(window.location.search).get("t")||"");
@@ -62,14 +70,17 @@ export default function FloorLinkPage(){
 
   const send=async(body:Record<string,unknown>,said:string)=>{
     if(!token||busy)return;
+    // Nothing is recorded anonymously. The server refuses an unnamed action outright; asking here means
+    // the operator gets the sign-in box rather than a rejection after pressing Save.
+    if(who.trim().length<2){setAsking(true);setToast("⚠ Put your name in first — every entry says who made it");return}
     setBusy(true);
     try{
       const r=await fetch("/api/floor",{method:"POST",headers:{"content-type":"application/json","x-floor-token":token},
         body:JSON.stringify({...body,by:who})});
       const j=await r.json() as {view?:FloorView;error?:string};
-      if(!r.ok||!j.view){setToast(j.error||"That could not be saved");setBusy(false);return}
-      setView(j.view);setSyncedAt(new Date().toISOString());setToast(said);
-    }catch{setToast("No connection — nothing was saved")}
+      if(!r.ok||!j.view){setToast("⚠ "+(j.error||"That could not be saved"));setBusy(false);return}
+      setView(j.view);setSyncedAt(new Date().toISOString());setToast("✓ "+said);
+    }catch{setToast("⚠ No connection — nothing was saved")}
     setBusy(false);
   };
 
@@ -83,15 +94,18 @@ export default function FloorLinkPage(){
 }
 
 /** Separated from the loading of it so the screen can be rendered against a known floor. */
-export function FloorScreen({view,who,setWho,asking,setAsking,busy,toast,send,syncedAt,since,setSince,token,refresh}:{
+export function FloorScreen({view,who,setWho,asking,setAsking,busy,toast,send,syncedAt,since,setSince,token,refresh,initialPanel=null}:{
   view:FloorView;who:string;setWho:(v:string)=>void;asking:boolean;setAsking:(v:boolean)=>void;
   busy:boolean;toast:string;send:(body:Record<string,unknown>,said:string)=>void;syncedAt:string;
   since?:string;setSince?:(v:string)=>void;token?:string;refresh:()=>void;
+  // Which panel starts open. Only a rendered check passes this — the tablet always starts closed —
+  // but it is what lets the entry controls be looked at without a browser driving the page.
+  initialPanel?:Panel;
 }){
   const [tab,setTab]=useState<Tab>("Today");
   const [station,setStation]=useState("All stations");
   const [open,setOpen]=useState<string|null>(null);      // a job the operator asked to look at
-  const [panel,setPanel]=useState<"record"|"instructions"|"problem"|null>(null);
+  const [panel,setPanel]=useState<Panel>(initialPanel);
 
   const atStation=(w:FloorWork)=>station==="All stations"||w.line===station;
   const inTab=(w:FloorWork)=>{
@@ -108,6 +122,17 @@ export function FloorScreen({view,who,setWho,asking,setAsking,busy,toast,send,sy
   const focus=(open&&jobs.find(w=>w.id===open))||next;
   const rest=shown.filter(w=>w.id!==focus?.id);
   const blocked=jobs.filter(w=>w.hold);
+  // The "target" tile used to read 1,080 against a job for 600, with nothing saying where the other 480
+  // came from. It is every open job added up, so it is now labelled as that and broken down underneath,
+  // and the job those bottles are actually on is shown as a card.
+  const openJobs=jobs.filter(w=>!w.hold&&w.stage<4);
+  const openTarget=openJobs.reduce((a,w)=>a+w.quantity,0);
+  const openMade=openJobs.reduce((a,w)=>a+w.good,0);
+  const others=openJobs.filter(w=>w.id!==focus?.id);
+  const otherUnits=others.reduce((a,w)=>a+w.remaining,0);
+  // The job to get a mould and materials ready for — so work already made and waiting on quality or the
+  // packing bench is not it.
+  const upNext=others.filter(w=>w.stage<=1).sort(order)[0];
 
   return <Shell company={view.company} who={who} station={station} syncedAt={syncedAt} since={since}>
     <nav className="wf-tabs">
@@ -121,12 +146,20 @@ export function FloorScreen({view,who,setWho,asking,setAsking,busy,toast,send,sy
       </div>
     </nav>
 
-    {asking&&<div className="wf-who">
-      <form onSubmit={e=>{e.preventDefault();const n=who.trim();if(!n)return;const at=new Date().toISOString();try{localStorage.setItem("ml_floor_name",n);localStorage.setItem("ml_floor_since",at)}catch{/* private browsing */}setSince?.(at);setAsking(false)}}>
-        <label>Your first name<input value={who} onChange={e=>setWho(e.target.value)} placeholder="so every entry says who made it"/></label>
-        <button className="wf-btn primary" type="submit">Start</button>
-      </form>
-    </div>}
+    {/* Signing in costs one line, and once it is done it stays one line. The full-width name field was
+        taking a third of a tablet screen for something answered once a shift. */}
+    {asking
+      ?<div className="wf-who">
+        <form onSubmit={e=>{e.preventDefault();const n=who.trim();if(n.length<2)return;const at=new Date().toISOString();try{localStorage.setItem("ml_floor_name",n);localStorage.setItem("ml_floor_since",at)}catch{/* private browsing */}setSince?.(at);setAsking(false)}}>
+          <label htmlFor="wf-name">Your first name</label>
+          <input id="wf-name" value={who} onChange={e=>setWho(e.target.value)} placeholder="every entry says who made it"/>
+          <button className="wf-btn primary" type="submit" disabled={who.trim().length<2}>Sign in</button>
+        </form>
+      </div>
+      :<div className="wf-signed">
+        <span><i className="wf-avatar">{who.slice(0,1).toUpperCase()}</i><b>{who}</b> · Signed in{since?<em> since {clock(since)}</em>:null}</span>
+        <button className="wf-link" onClick={()=>setAsking(true)}>Not you?</button>
+      </div>}
 
     <div className="wf-body">
       <div className="wf-main">
@@ -155,9 +188,29 @@ export function FloorScreen({view,who,setWho,asking,setAsking,busy,toast,send,sy
             <Tile value={view.shift.active} label="Active" tone="go"/>
             <Tile value={view.shift.waiting} label="Waiting" tone="wait"/>
             <Tile value={view.shift.blocked} label="Blocked" tone={view.shift.blocked?"stop":undefined}/>
-            <Tile value={`${num(view.shift.made)} / ${num(view.shift.target)}`} label="Made" tone="go" wide/>
+            <Tile value={`${num(openMade)} / ${num(openTarget)}`} label="Made · every open job" tone="go" wide/>
           </div>
+          <p className="wf-breakdown">
+            {focus?<><b>{num(focus.remaining)}</b> left on {focus.id}</>:"Nothing open here"}
+            {others.length?<> · <b>{num(otherUnits)}</b> on {others.length} other job{others.length===1?"":"s"}</>:null}
+          </p>
         </section>
+
+        {/* One card, not the schedule. Enough to get the next mould and its materials to the machine
+            before the current run ends. */}
+        {upNext&&<section className="wf-panel">
+          <h2>Up next</h2>
+          <div className="wf-upnext">
+            <b>{upNext.item}</b>
+            <small>Job {upNext.id} · {upNext.line} · {dueLabel(view.orders.find(o=>o.id===upNext.orderId)?.due||upNext.date,upNext.dueAt,view.today)}</small>
+            <div className="wf-upnext-facts">
+              <Fact label="To make" value={num(upNext.remaining)}/>
+              <Fact label="Mould" value={upNext.build.mold||"—"}/>
+              <Fact label="Materials" value={readyState(upNext).label}/>
+            </div>
+            <button className="wf-btn" onClick={()=>{setOpen(upNext.id);setPanel(null);window.scrollTo(0,0)}}>Open job</button>
+          </div>
+        </section>}
         <section className="wf-panel">
           <div className="wf-panel-head"><h2>Live activity</h2><button className="wf-link" onClick={refresh}>Refresh</button></div>
           {view.activity.length?<ul className="wf-feed">
@@ -167,7 +220,7 @@ export function FloorScreen({view,who,setWho,asking,setAsking,busy,toast,send,sy
       </aside>
     </div>
 
-    {toast&&<div className="wf-toast">✓ {toast}</div>}
+    {toast&&<div className={`wf-toast${toast.startsWith("⚠")?" bad":""}`}>{toast}</div>}
   </Shell>;
 }
 
@@ -211,16 +264,21 @@ function Tile({value,label,tone,wide}:{value:number|string;label:string;tone?:"g
  * The job in front of the operator. One unmistakable next action, sized for a glove, with every number
  * labelled — a bare "500" on a screen is a figure somebody has to stop and interpret.
  */
-function JobCard({job,view,busy,panel,setPanel,send,pinned,token,onClose}:{job:FloorWork;view:FloorView;busy:boolean;panel:string|null;setPanel:(p:"record"|"instructions"|"problem"|null)=>void;send:(b:Record<string,unknown>,s:string)=>void;pinned:boolean;token?:string;onClose?:()=>void}){
+function JobCard({job,view,busy,panel,setPanel,send,pinned,token,onClose}:{job:FloorWork;view:FloorView;busy:boolean;panel:Panel;setPanel:(p:Panel)=>void;send:(b:Record<string,unknown>,s:string)=>void;pinned:boolean;token?:string;onClose?:()=>void}){
   const pct=job.quantity?Math.min(100,Math.round(job.good/job.quantity*100)):0;
   const order=view.orders.find(o=>o.id===job.orderId);
   const stage=job.stage;
-  return <article className={`wf-job${job.hold?" blocked":""}${job.priority==="rush"?" rush":""}`}>
+  const due=dueLabel(order?.due||job.date,job.dueAt,view.today);
+  const ready=readyState(job);
+  // A paused job used to read "IN PRODUCTION" with a button underneath offering to resume it. Nothing
+  // was moving and the screen said it was.
+  const flag=job.hold?"BLOCKED":job.paused?"PAUSED":pinned?"DO THIS NEXT":STAGE_LABEL[stage].toUpperCase();
+  return <article className={`wf-job${job.hold?" blocked":""}${job.paused&&!job.hold?" paused":""}${job.priority==="rush"?" rush":""}`}>
     <header className="wf-job-top">
-      <span className="wf-flag">{job.hold?"BLOCKED":pinned?"DO THIS NEXT":STAGE_LABEL[stage].toUpperCase()}</span>
-      <span className="wf-due">
+      <span className={`wf-flag${job.paused&&!job.hold?" paused":""}`}>{flag}</span>
+      <span className={`wf-due${/^OVERDUE/.test(due)?" late":""}`}>
         {job.priority==="rush"&&<b>RUSH</b>}
-        {job.dueAt?`Due ${clock(job.dueAt)}`:`Needed ${day(order?.due||job.date)}`}
+        {due}
         {onClose&&<button className="wf-x" onClick={onClose} aria-label="Back to the job to do next">×</button>}
       </span>
     </header>
@@ -228,7 +286,7 @@ function JobCard({job,view,busy,panel,setPanel,send,pinned,token,onClose}:{job:F
     <div className="wf-job-body">
       <Shot photo={job.build.photo} alt={job.item} token={token}/>
       <div className="wf-job-head">
-        <h2>{job.item}</h2>
+        <h2>{job.item}{job.paused&&!job.hold?<span className="wf-paused">PAUSED</span>:null}</h2>
         <p className="wf-sub">Job {job.id}{order?<> · Customer order {order.id} · {order.customer}</>:<> · {job.purpose}</>}</p>
         <div className="wf-facts">
           <Fact label="Station" value={job.line}/>
@@ -283,22 +341,30 @@ function JobCard({job,view,busy,panel,setPanel,send,pinned,token,onClose}:{job:F
 
     <div className="wf-two">
       <section className="wf-mini">
-        <h3>Materials</h3>
-        <div className="wf-chips">
-          {job.ready.checks.map(c=><span key={c.item} className={!c.tracked?"na":c.ok?"ok":"no"}>
-            {c.item}{c.tracked?(c.ok?" ✓":` · short ${num(c.need-c.have)}`):" · not counted"}
-          </span>)}
-          {!job.ready.checks.length&&<span className="na">Nothing to check</span>}
-        </div>
+        {/* "No · not counted" told nobody whether that was a problem. The state is now one of three
+            words, and the list behind it is a button away rather than a row of chips to decode. */}
+        <div className="wf-mini-head"><h3>Materials</h3><span className={`wf-state ${ready.tone}`}>{ready.label}</span></div>
+        <button className="wf-btn" onClick={()=>setPanel(panel==="materials"?null:"materials")}>
+          {panel==="materials"?"Hide materials":"Check materials"}</button>
+        {panel==="materials"&&<ul className="wf-matlist">
+          {job.ready.checks.map(c=><li key={c.item} className={!c.tracked?"na":c.ok?"ok":"no"}>
+            <span>{c.item}</span>
+            <b>{c.tracked?`${num(c.have)} of ${num(c.need)} needed`:"not counted in the system"}</b>
+            <em>{!c.tracked?"Not checked":c.ok?"Ready":`Short ${num(c.need-c.have)}`}</em>
+          </li>)}
+          {!job.ready.checks.length&&<li className="na"><span>This job uses nothing that is counted.</span></li>}
+        </ul>}
       </section>
       <section className="wf-mini">
         <h3>Packing</h3>
-        <p className="wf-pack">
-          {job.build.caps.length?job.build.caps.map(c=>`${c.qty} ${c.component.toLowerCase()}`).join(" + "):"no caps"}
-          {job.build.perCase?` • ${job.build.perCase} per case`:""}
-          {job.build.perCase?` • ${num(Math.ceil(job.quantity/job.build.perCase))} cases`:""}
-          {job.build.casesPerPallet?` • ${job.build.casesPerPallet} cases per pallet`:""}
-        </p>
+        {/* Each number says what it counts. "no caps • 1 per case • 600 cases" made the reader guess
+            which of those was bottles and which was boxes. */}
+        <div className="wf-packfacts">
+          <Fact label="Caps per bottle" value={job.build.caps.length?job.build.caps.map(c=>`${c.qty} × ${c.component.toLowerCase()}`).join(" + "):"0 — no caps"}/>
+          <Fact label="Bottles per case" value={job.build.perCase?num(job.build.perCase):"not boxed"}/>
+          <Fact label="Cases required" value={job.build.perCase?num(Math.ceil(job.quantity/job.build.perCase)):"—"}/>
+          <Fact label="Cases per pallet" value={job.build.casesPerPallet?num(job.build.casesPerPallet):"—"}/>
+        </div>
         {job.packing.record?.cartons!=null&&<p className="wf-packed">
           Packed so far: <b>{num(job.packing.record.cartons)}</b> cartons · <b>{num(job.packing.record.pallets||0)}</b> pallets
           {job.packing.record.batchId?<> · batch <b>{job.packing.record.batchId}</b></>:null}
@@ -319,8 +385,8 @@ function JobCard({job,view,busy,panel,setPanel,send,pinned,token,onClose}:{job:F
     {panel==="record"&&stage===3&&<Packing job={job} company={view.company} busy={busy} onCancel={()=>setPanel(null)}
       onSave={(e)=>send({op:"job.pack",woId:job.id,...e},`${job.id} · ${num(e.cartons)} cartons recorded`)}
       onDone={()=>send({op:"job.stage",woId:job.id,stage:4},`${job.id} packed and ready to ship`)}/>}
-    {panel==="record"&&stage!==3&&<Record job={job} busy={busy} onCancel={()=>setPanel(null)}
-      onSave={(good,scrap)=>send({op:"wo.progress",woId:job.id,good,scrap},`${job.id} · ${num(good)} recorded`)}
+    {panel==="record"&&stage!==3&&<Record job={job} reasons={view.scrapReasons||[]} busy={busy} onCancel={()=>setPanel(null)}
+      onSave={(good,scrap,note)=>send({op:"wo.progress",woId:job.id,good,scrap,note},`${job.id} · ${num(good)} recorded`)}
       onFinish={()=>send({op:"job.stage",woId:job.id,stage:2},`${job.id} sent to quality`)}/>}
     {panel==="instructions"&&<Instructions build={job.build} job={job} order={order}/>}
     {panel==="problem"&&<Problem reasons={view.holdReasons} busy={busy} onCancel={()=>setPanel(null)}
@@ -368,19 +434,49 @@ function NextCard({job,token,onOpen}:{job:FloorWork;token?:string;onOpen:()=>voi
   </article>;
 }
 
-/** Recording what came off the machine. Big targets, and nothing sent until Save. */
-function Record({job,busy,onSave,onFinish,onCancel}:{job:FloorWork;busy:boolean;onSave:(good:number,scrap:number)=>void;onFinish:()=>void;onCancel:()=>void}){
-  const [good,setGood]=useState("24");
-  const [scrap,setScrap]=useState("0");
-  return <div className="wf-form">
+/**
+ * A counter sized for a gloved hand. Two numbers, each with its own big minus and plus, quick jumps for
+ * the sizes actually run, and a reason asked for only once there is scrap to explain. Nothing is sent
+ * until Save, so a mis-tap costs a tap back rather than a wrong entry in the log.
+ */
+function Counter({label,value,set,step,quick,tone}:{label:string;value:number;set:(n:number)=>void;step:number;quick:number[];tone?:"scrap"}){
+  return <div className={`wf-counter${tone?` ${tone}`:""}`}>
+    <span className="wf-counter-label">{label}</span>
+    <div className="wf-counter-row">
+      <button className="wf-step" onClick={()=>set(Math.max(0,value-step))} aria-label={`${label} down ${step}`}>−</button>
+      <input inputMode="numeric" pattern="[0-9]*" value={String(value)} aria-label={label}
+        onChange={e=>set(Math.max(0,Math.floor(Number(e.target.value.replace(/[^0-9]/g,""))||0)))}/>
+      <button className="wf-step" onClick={()=>set(value+step)} aria-label={`${label} up ${step}`}>+</button>
+    </div>
+    <div className="wf-quick">{quick.map(q=><button key={q} className="wf-btn" onClick={()=>set(value+q)}>+{q}</button>)}
+      {value>0&&<button className="wf-btn" onClick={()=>set(0)}>Clear</button>}</div>
+  </div>;
+}
+
+function Record({job,reasons,busy,onSave,onFinish,onCancel}:{job:FloorWork;reasons:string[];busy:boolean;onSave:(good:number,scrap:number,note:string)=>void;onFinish:()=>void;onCancel:()=>void}){
+  const [good,setGood]=useState(0);
+  const [scrap,setScrap]=useState(0);
+  const [reason,setReason]=useState("");
+  const [note,setNote]=useState("");
+  const said=reason==="Other"?note.trim():reason;
+  const left=Math.max(0,job.remaining-good);
+  return <div className="wf-form wf-record">
     <h3>Record production · {job.id}</h3>
-    <div className="wf-quick">{[24,48,100].map(q=><button key={q} className="wf-btn" onClick={()=>setGood(String(q))}>+{q}</button>)}</div>
-    <label>Good bottles<input inputMode="numeric" value={good} onChange={e=>setGood(e.target.value)}/></label>
-    <label>Scrap<input inputMode="numeric" value={scrap} onChange={e=>setScrap(e.target.value)}/></label>
-    <p className="wf-quiet">{num(job.remaining)} still to make on this job.</p>
+    <div className="wf-counters">
+      <Counter label="Good bottles" value={good} set={setGood} step={1} quick={[24,48,100]}/>
+      <Counter label="Scrap" value={scrap} set={setScrap} step={1} quick={[1,5,10]} tone="scrap"/>
+    </div>
+    {scrap>0&&<div className="wf-reason">
+      <span className="wf-counter-label">What went wrong? <em>optional</em></span>
+      <div className="wf-reasons">
+        {reasons.map(r=><button key={r} className={`wf-btn${reason===r?" on":""}`} onClick={()=>setReason(reason===r?"":r)}>{r}</button>)}
+      </div>
+      {reason==="Other"&&<input value={note} onChange={e=>setNote(e.target.value)} placeholder="In a few words" aria-label="What went wrong"/>}
+    </div>}
+    <p className="wf-running">Recording <b>{num(good)}</b> good{scrap?<> and <b>{num(scrap)}</b> scrap</>:null} · <b>{num(left)}</b> would still be left on this job.</p>
     <div className="wf-form-actions">
       <button className="wf-btn" onClick={onCancel}>Cancel</button>
-      <button className="wf-btn primary" disabled={busy} onClick={()=>onSave(Math.max(0,Number(good)||0),Math.max(0,Number(scrap)||0))}>{busy?"Saving…":"Save"}</button>
+      <button className="wf-btn primary" disabled={busy||(!good&&!scrap)} onClick={()=>onSave(good,scrap,said)}>{busy?"Saving…":"Save"}</button>
     </div>
     {/* The end of a run is the same moment as its last entry, so it is offered here rather than as a
         fifth button competing with the one thing to press. */}

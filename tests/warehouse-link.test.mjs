@@ -104,15 +104,37 @@ t("a run cannot report more than it was for",overshoot.data.workOrders.find(w=>w
 // quietly accepting a press that would invent stock.
 t("a run that is already complete takes no more",!!applyFloorAction(data,{op:"wo.progress",woId:finishedRun.id,good:24}).error);
 
-t("the floor can hand a run to quality",!applyFloorAction(data,{op:"wo.status",woId:wo.id,status:"QC hold"}).error);
+t("the floor can hand a run to quality",!applyFloorAction(data,{op:"wo.status",woId:wo.id,status:"QC hold",by:"Marta"}).error);
 // Marking work Done is the owner's call after the checks; the link must not be able to close its own.
 t("but it cannot mark its own work Done",!!applyFloorAction(data,{op:"wo.status",woId:wo.id,status:"Done"}).error);
 t("nor invent a status",!!applyFloorAction(data,{op:"wo.status",woId:wo.id,status:"Shipped"}).error);
-t("an unknown verb is refused",!!applyFloorAction(data,{op:"settings.update",woId:wo.id}).error);
+t("an unknown verb is refused",!!applyFloorAction(data,{op:"settings.update",woId:wo.id,by:"Marta"}).error);
+
+// Who recorded this is the one question the audit log exists to answer, and "Warehouse" was not an
+// answer. Every verb now needs a name, and it cannot be got round by rewriting the page.
+console.log("\nNothing is recorded anonymously:");
+t("an unnamed entry is refused",!!applyFloorAction(data,{op:"wo.progress",woId:wo.id,good:24}).error);
+t("and says what to do about it",
+  /sign in/i.test(applyFloorAction(data,{op:"wo.progress",woId:wo.id,good:24}).error||""));
+t("a blank name is not a name",!!applyFloorAction(data,{op:"wo.progress",woId:wo.id,good:24,by:"   "}).error);
+t("nor is a single letter",!!applyFloorAction(data,{op:"wo.progress",woId:wo.id,good:24,by:"J"}).error);
+t("nor punctuation dressed up as one",!!applyFloorAction(data,{op:"wo.progress",woId:wo.id,good:24,by:"<>"}).error);
+t("pausing a job needs a name too",!!applyFloorAction(data,{op:"job.pause",woId:wo.id}).error);
+t("so does starting one",!!applyFloorAction(data,{op:"job.stage",woId:wo.id,stage:1}).error);
+t("a name gets the work done",!applyFloorAction(data,{op:"wo.progress",woId:wo.id,good:24,by:"Marta"}).error);
+t("and lands on the audit line",applyFloorAction(data,{op:"wo.progress",woId:wo.id,good:24,by:"Marta"}).summary.includes("Marta"));
+// Why bottles were scrapped is the half of the number anybody can act on.
+const scrapped=applyFloorAction(data,{op:"wo.progress",woId:wo.id,good:0,scrap:6,note:"Short shot",by:"Marta"});
+t("a scrap reason is recorded with the count",scrapped.summary.includes("Short shot"),`${scrapped.summary}`);
+t("and is left off when there is nothing scrapped",
+  !applyFloorAction(data,{op:"wo.progress",woId:wo.id,good:10,note:"Short shot",by:"Marta"}).summary.includes("Short shot"));
+t("the tablet asks before it sends",/who\.trim\(\)\.length<2/.test(readFileSyncOf("../app/floor/page.tsx")));
+t("the vocabulary of scrap reasons comes from the server",floorView(data).scrapReasons.length>0);
+
 t("a step that is not on the plan is refused",!!applyFloorAction(data,{op:"step.record",stepId:"nope",made:5}).error);
 t("a work order that is not open is refused",!!applyFloorAction(data,{op:"wo.progress",woId:"nope",good:5}).error);
 // Numbers arrive from a page anyone can rewrite, so they are cleaned rather than trusted.
-t("a negative count cannot run the record backwards",applyFloorAction(data,{op:"wo.progress",woId:wo.id,good:-500,scrap:-5}).error==="Nothing to add");
+t("a negative count cannot run the record backwards",applyFloorAction(data,{op:"wo.progress",woId:wo.id,good:-500,scrap:-5,by:"Marta"}).error==="Nothing to add");
 t("a nonsense count is refused, not stored",!!applyFloorAction(data,{op:"wo.progress",woId:wo.id,good:"lots"}).error);
 
 console.log("\nThe tablet cannot count the same bottles twice:");
@@ -120,12 +142,12 @@ console.log("\nThe tablet cannot count the same bottles twice:");
 const onRun=data.prodDays.flatMap(d=>d.steps).find(s=>s.workOrderId);
 t("a step being run is refused here",!!applyFloorAction(data,{op:"step.record",stepId:onRun.id,made:400}).error);
 t("and it says where the number goes instead",
-  applyFloorAction(data,{op:"step.record",stepId:onRun.id,made:400}).error.includes(onRun.workOrderId));
+  applyFloorAction(data,{op:"step.record",stepId:onRun.id,made:400,by:"Marta"}).error.includes(onRun.workOrderId));
 const shown=floorView(data).days.flatMap(d=>d.steps).find(s=>s.id===onRun.id);
 t("the tablet shows the run's figure, not the plan's",shown.actualQty===500,`${shown.actualQty}`);
 t("and names the run so the operator knows where to look",shown.workOrderId===onRun.workOrderId);
 const free=data.prodDays.flatMap(d=>d.steps).find(s=>!s.workOrderId&&!s.done);
-t("a step with no run is still recordable from the tablet",!applyFloorAction(data,{op:"step.record",stepId:free.id,made:10}).error);
+t("a step with no run is still recordable from the tablet",!applyFloorAction(data,{op:"step.record",stepId:free.id,made:10,by:"Marta"}).error);
 
 // ---------------------------------------------------------------------------
 // The job traveller: what the floor screen runs on.
@@ -287,6 +309,38 @@ console.log("\nThe audit says the record came from the link, not from a person w
 t("an unnamed tablet is still identified",floorActor()==="Warehouse link");
 t("a name given on the tablet is carried through",floorActor("Marta")==="Warehouse link · Marta");
 t("and it cannot smuggle markup into the log",!floorActor("<script>alert(1)</script>").includes("<"));
+
+// ---------------------------------------------------------------------------
+// Ten things reported from standing in front of the tablet. Every one of them is a case of the screen
+// knowing something and not saying it plainly.
+console.log("\nThe screen says what it means:");
+const ui=readFileSyncOf("../app/floor/page.tsx");
+const {dueLabel}=app;
+const css=readFileSyncOf("../app/warehouse-floor.css");
+// "In Production" over a button offering to resume it.
+t("a paused job says PAUSED, not In Production",/job\.paused\?"PAUSED"/.test(ui));
+t("and again beside the item, where the eye lands",/wf-paused/.test(ui)&&/\.wf-paused\{/.test(css));
+// "Needed Tue, Sep 8" makes the reader work out what today is first.
+t("today is called today",dueLabel("2026-09-08",undefined,"2026-09-08")==="Due today");
+t("tomorrow is called tomorrow",dueLabel("2026-09-09",undefined,"2026-09-08")==="Due tomorrow");
+t("a passed date is called overdue",/^OVERDUE/.test(dueLabel("2026-09-05",undefined,"2026-09-08")));
+t("a time is kept when there is one",dueLabel("2026-09-08","2026-09-08T18:00:00Z","2026-09-08").startsWith("Due today at"));
+t("a further date still reads as a date",/^Due /.test(dueLabel("2026-09-20",undefined,"2026-09-08")));
+// "no caps • 1 per case • 600 cases" — three numbers, no labels.
+t("packing counts say what they count",/Caps per bottle/.test(ui)&&/Bottles per case/.test(ui)&&/Cases required/.test(ui));
+// "No · not counted" told nobody whether that was a problem.
+t("materials readiness is one of three words",/Not checked/.test(ui)&&/"Ready"/.test(ui)&&/Missing \$\{short\.length\}/.test(ui));
+t("and there is something to press to see them",/Check materials/.test(ui));
+// 1,080 on a job for 600.
+t("the open-work total says it is every job",/every open job/.test(ui));
+t("and breaks down where the rest of it is",/wf-breakdown/.test(ui)&&/other job/.test(ui));
+t("the next job is previewed, not the whole schedule",/Up next<\/h2>/.test(ui)&&/wf-upnext/.test(ui));
+// Gloves.
+t("recording has its own big controls",/wf-step/.test(ui)&&/min-height:72px/.test(css));
+t("and asks why only once there is scrap",/\{scrap>0&&<div className="wf-reason">/.test(ui));
+// Grey on grey under warehouse lighting.
+t("the muted greys were lifted",/--dim:#c2cfc8;--faint:#93a29a/.test(css));
+t("a refusal no longer arrives wearing a tick",/wf-toast\.bad/.test(css)&&!/wf-toast">✓/.test(ui));
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
