@@ -17,8 +17,8 @@ to invoicing or payments as touching real money.
 
 ## The state of play
 
-`main` is deployed and pushed through **`cc4205e`** — Phases 1-9. Phase 10 is in the tree, uncommitted:
-the packing bench.
+`main` is deployed and pushed through **`9abd116`** — Phases 1-10. Phase 11 is in the tree, uncommitted:
+product photos.
 
 The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
 The production rebuild is `4b2ed00` (Phase 1, model), `8c0bf42` (Phase 2, the calendar) and Phase 3 in
@@ -395,7 +395,7 @@ numbers and amounts, and a test asserts none of that reaches the tablet.
 the server. A stage moves forward one step at a time: skipping quality is how untested bottles reach a
 customer, so it is refused, and so is a block with no reason.
 
-### Phase 10 — the packing bench (in the tree, uncommitted)
+### Phase 10 — the packing bench (`9abd116`)
 
 Packing was one button. It is its own job now, with its own owner: the person who boxes a run is often
 not the person who moulded it, and "who made this" and "who packed this" are different questions.
@@ -420,10 +420,37 @@ Two defects the render caught: the due date showed **Invalid Date** for orders s
 label rather than an ISO date (the floor view normalises it now, and the screen shows an unreadable date
 as it was stored), and the batch id and note had picked up the big centred styling meant for quantities.
 
+### Phase 11 — product photos (in the tree, uncommitted)
+
+A photo identifies a bottle across a bench far faster than a name does — "5 Gal + 2 Screw Caps" and
+"5 Gal + 1 Silicone Cap" are one word apart on a screen and obvious side by side in a picture. Photos
+are keyed by the **item name** the rest of the app already uses, so the inventory list, the build sheet
+and the warehouse tablet all reach the same image with no second identifier to keep in step.
+
+- **They live in the company's own Postgres**, in an `item_photos` table. Not on the web server's disk,
+  which Render wipes on every deploy; and not in the company record, because every client PUTs that
+  record whole on every save and a few hundred kilobytes of base64 would ride along with every changed
+  order quantity. Stored base64 in TEXT so Postgres and D1 behave identically — about a third larger
+  than bytes, which for a handful of photos beats maintaining two code paths.
+- **Uploaded from Inventory** (owner only): a thumbnail per finished product with Add / Replace /
+  Remove. The browser resizes to 1,100px and re-encodes as JPEG at 0.72 *before* sending, so a 5MB phone
+  photo arrives as roughly 100KB.
+- **`/api/photo`** — GET for anyone who can already see the product (a signed-in user, or the warehouse
+  link's token); POST and DELETE for the owner. Only JPEG, PNG and WebP are accepted; **SVG is not**,
+  because it can carry script. The URL carries the version it was saved at, so it can be cached hard and
+  still change the moment a new photo is saved.
+- **The tablet is sent a URL, not bytes** — the image is fetched and cached by the browser like any
+  other, and appears on the pinned job, the next-up cards and the build sheet, with the drawn bottle as
+  the fallback until a photo exists.
+
+Also: the floor's empty state used to say only "Nothing to do at this station right now". It now says
+*why* — no jobs released at all, nothing at this station, or nothing in this tab — because those are
+three different problems with three different fixes.
+
 ### Still open on the floor screen
 
-- **No photos.** The build sheet has a drawn bottle, not a picture of the finished item, and a problem
-  cannot carry a photo — there is nowhere to store one.
+- **A problem report still cannot carry a photo.** The store now exists; hanging one off a `hold` is
+  the small remaining piece.
 - **Quality is still signed off in the office**, because passing it is what puts bottles into stock. The
   floor is told where the job is rather than asked to sign it.
 - **No kiosk mode and no offline queue.** A dropped connection loses the entry rather than holding it.
@@ -508,7 +535,7 @@ on Render before the tablet is handed over.
 
 - **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
   `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
-  Run with `node tests/<name>.test.mjs`. 389 assertions.
+  Run with `node tests/<name>.test.mjs`. 397 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.

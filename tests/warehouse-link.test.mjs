@@ -9,10 +9,11 @@
 let pass=0,fail=0;
 const t=(n,c,d)=>{if(c)pass++;else fail++;console.log(`${c?"  ok  ":"  FAIL"} ${n}${c?"":"  → "+d}`)};
 
-const readFileSyncRoute=()=>{
+const readFileSyncOf=(rel)=>{
   const {readFileSync}=require$("node:fs");
-  return readFileSync(new URL("../app/api/floor/route.ts",import.meta.url),"utf8");
+  return readFileSync(new URL(rel,import.meta.url),"utf8");
 };
+const readFileSyncRoute=()=>readFileSyncOf("../app/api/floor/route.ts");
 let require$=null;
 let floor=null,app=null;
 try{
@@ -180,6 +181,21 @@ t("the reasons for stopping are offered",v.holdReasons.includes("Machine down"))
 const feed=JSON.stringify(v.activity);
 t("the live feed carries no money",!/\$/.test(feed));
 t("and no invoice numbers",!/INV-/.test(feed));
+
+console.log("\nProduct photos travel separately from the record:");
+// The company record is PUT whole on every save; a photo in it would ride along with every order change.
+const dbSrc=readFileSyncOf("../app/server/db.ts");
+t("photos have their own table",/CREATE TABLE IF NOT EXISTS item_photos/.test(dbSrc));
+t("they are not in the company record",!/photo/i.test(JSON.stringify(data.settings)));
+const photoRoute=readFileSyncOf("../app/api/photo/route.ts");
+t("only an owner may set one",/user\.role!=="owner"/.test(photoRoute));
+t("but the warehouse link may read one",/tokenMatches/.test(photoRoute));
+// SVG can carry script; a product photo has no reason to be one.
+t("only real image types are accepted",/image\/jpeg/.test(photoRoute)&&/image\/png/.test(photoRoute)&&!/image\/svg/.test(photoRoute));
+t("and oversized uploads are refused",/MAX_BASE64/.test(photoRoute));
+t("the tablet is given a URL, not the bytes",/api\/photo\?item=/.test(readFileSyncOf("../app/server/floor.ts")));
+const shrink=readFileSyncOf("../app/components/photo.ts");
+t("photos are shrunk in the browser before they are sent",/MAX_EDGE|toDataURL\("image\/jpeg"/.test(shrink));
 
 console.log("\nNothing about this endpoint may sit in a cache:");
 const route=readFileSyncRoute();

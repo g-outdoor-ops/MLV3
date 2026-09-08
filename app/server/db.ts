@@ -1,5 +1,5 @@
 // One small storage layer for Postgres (Render) or Cloudflare D1.
-// Tables: app_state (the company record), audit_events, users, sessions, qbo_tokens.
+// Tables: app_state (the company record), audit_events, users, sessions, qbo_tokens, item_photos.
 import { seedData, type AppData } from "../app-data";
 
 type Row=Record<string,unknown>;
@@ -15,6 +15,15 @@ const SCHEMA_PG=[
   `CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, name TEXT NOT NULL, role TEXT NOT NULL, password_hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS qbo_tokens (id TEXT PRIMARY KEY, realm_id TEXT NOT NULL, access_token TEXT NOT NULL, refresh_token TEXT NOT NULL, expires_at TEXT NOT NULL, refresh_expires_at TEXT NOT NULL, env TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  // Product photos, keyed by the item name the rest of the app already uses. They live here rather than
+  // on disk because the web service's filesystem is wiped on every deploy, and in their own table rather
+  // than in the company record because every client PUTs that record whole on every save — a few hundred
+  // kilobytes of base64 riding along with a changed order quantity would be absurd.
+  //
+  // Stored base64 in TEXT rather than as bytes: Postgres wants bytea and D1 wants BLOB, and one string
+  // column behaves identically on both. It costs about a third in size, which for a handful of product
+  // photos is nothing next to having two code paths.
+  `CREATE TABLE IF NOT EXISTS item_photos (item TEXT PRIMARY KEY, mime TEXT NOT NULL, data TEXT NOT NULL, bytes INTEGER NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT)`,
 ];
 const SCHEMA_D1=SCHEMA_PG.map(s=>s.replace("INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY","INTEGER PRIMARY KEY AUTOINCREMENT"));
 
@@ -70,4 +79,32 @@ export async function writeState(data:AppData,actor:string,action:string,summary
     await db.exec("UPDATE app_state SET payload=$1,version=version+1,updated_at=$2,updated_by=$3 WHERE id='company'",[JSON.stringify(data),now,actor]);
   }
   await db.exec("INSERT INTO audit_events(actor,action,summary,created_at) VALUES($1,$2,$3,$4)",[actor,action,summary,now]);return now}
+// ---- product photos ----
+export type ItemPhoto={item:string;mime:string;data:string;bytes:number;updatedAt:string};
+export async function readPhoto(item:string):Promise<ItemPhoto|null>{
+  const db=await getDb();
+  const rows=await db.query("SELECT item,mime,data,bytes,updated_at FROM item_photos WHERE item=$1",[item]);
+  const r=rows[0];
+  return r?{item:String(r.item),mime:String(r.mime),data:String(r.data),bytes:Number(r.bytes),updatedAt:String(r.updated_at)}:null;
+}
+/** Which items have a photo, and when it changed — enough to build URLs without reading the bytes. */
+export async function listPhotos(){
+  const db=await getDb();
+  const rows=await db.query("SELECT item,updated_at,bytes FROM item_photos");
+  return rows.map(r=>({item:String(r.item),updatedAt:String(r.updated_at),bytes:Number(r.bytes)}));
+}
+export async function writePhoto(item:string,mime:string,data:string,by:string){
+  const db=await getDb();const now=new Date().toISOString();
+  await db.exec("DELETE FROM item_photos WHERE item=$1",[item]);
+  await db.exec("INSERT INTO item_photos(item,mime,data,bytes,updated_at,updated_by) VALUES($1,$2,$3,$4,$5,$6)",
+    [item,mime,data,Math.round(data.length*3/4),now,by]);
+  await audit(by,"photo.set",`Photo set for ${item}`);
+  return now;
+}
+export async function deletePhoto(item:string,by:string){
+  const db=await getDb();
+  await db.exec("DELETE FROM item_photos WHERE item=$1",[item]);
+  await audit(by,"photo.clear",`Photo removed from ${item}`);
+}
+
 export async function audit(actor:string,action:string,summary:string){const db=await getDb();await db.exec("INSERT INTO audit_events(actor,action,summary,created_at) VALUES($1,$2,$3,$4)",[actor,action,summary,new Date().toISOString()])}

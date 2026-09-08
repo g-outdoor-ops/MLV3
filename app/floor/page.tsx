@@ -78,14 +78,15 @@ export default function FloorLinkPage(){
   if(!view)return <Shell><p className="wf-empty">Loading the floor…</p></Shell>;
 
   return <FloorScreen view={view} who={who} setWho={setWho} asking={asking} setAsking={setAsking}
-    busy={busy} toast={toast} send={send} syncedAt={syncedAt} since={since} setSince={setSince} refresh={()=>setTick(t=>t+1)}/>;
+    busy={busy} toast={toast} send={send} syncedAt={syncedAt} since={since} setSince={setSince}
+    token={token||""} refresh={()=>setTick(t=>t+1)}/>;
 }
 
 /** Separated from the loading of it so the screen can be rendered against a known floor. */
-export function FloorScreen({view,who,setWho,asking,setAsking,busy,toast,send,syncedAt,since,setSince,refresh}:{
+export function FloorScreen({view,who,setWho,asking,setAsking,busy,toast,send,syncedAt,since,setSince,token,refresh}:{
   view:FloorView;who:string;setWho:(v:string)=>void;asking:boolean;setAsking:(v:boolean)=>void;
   busy:boolean;toast:string;send:(body:Record<string,unknown>,said:string)=>void;syncedAt:string;
-  since?:string;setSince?:(v:string)=>void;refresh:()=>void;
+  since?:string;setSince?:(v:string)=>void;token?:string;refresh:()=>void;
 }){
   const [tab,setTab]=useState<Tab>("Today");
   const [station,setStation]=useState("All stations");
@@ -130,14 +131,14 @@ export function FloorScreen({view,who,setWho,asking,setAsking,busy,toast,send,sy
     <div className="wf-body">
       <div className="wf-main">
         {focus
-          ?<JobCard job={focus} view={view} busy={busy} panel={panel} setPanel={setPanel} send={send}
+          ?<JobCard job={focus} view={view} busy={busy} panel={panel} setPanel={setPanel} send={send} token={token}
              pinned={focus.id===next?.id} onClose={open?()=>{setOpen(null);setPanel(null)}:undefined}/>
-          :<article className="wf-job"><p className="wf-empty">Nothing to do at this station right now.</p></article>}
+          :<article className="wf-job"><p className="wf-empty">{emptyReason(view,jobs,station,tab)}</p></article>}
 
         {rest.length>0&&<section className="wf-next">
           <h2>{tab==="Today"?"Up next today":tab}</h2>
           <div className="wf-next-grid">
-            {rest.map(w=><NextCard key={w.id} job={w} onOpen={()=>{setOpen(w.id);setPanel(null);window.scrollTo(0,0)}}/>)}
+            {rest.map(w=><NextCard key={w.id} job={w} token={token} onOpen={()=>{setOpen(w.id);setPanel(null);window.scrollTo(0,0)}}/>)}
           </div>
         </section>}
 
@@ -170,6 +171,17 @@ export function FloorScreen({view,who,setWho,asking,setAsking,busy,toast,send,sy
   </Shell>;
 }
 
+/** Say why the screen is empty, because "nothing here" has several quite different causes. */
+function emptyReason(view:FloorView,atStation:FloorWork[],station:string,tab:Tab){
+  if(!view.workOrders.length)return "No jobs on the floor. The office sends work here from the production calendar — nothing has been released yet.";
+  if(!atStation.length)return `Nothing at ${station}. Other stations have work — try All stations.`;
+  if(tab==="Now")return "Nothing running right now. Start the next job from Today.";
+  if(tab==="Upcoming")return "Nothing scheduled after today.";
+  if(tab==="Completed")return "Nothing finished yet today.";
+  if(tab==="Blocked")return "Nothing is blocked. Good.";
+  return "Everything for today is done or waiting on the office.";
+}
+
 /** Running first, then rush, then whatever is needed soonest. Blocked work sinks. */
 function order(a:FloorWork,b:FloorWork){
   const rank=(w:FloorWork)=>(w.hold?3:w.stage===1&&!w.paused?0:w.priority==="rush"?1:2);
@@ -199,7 +211,7 @@ function Tile({value,label,tone,wide}:{value:number|string;label:string;tone?:"g
  * The job in front of the operator. One unmistakable next action, sized for a glove, with every number
  * labelled — a bare "500" on a screen is a figure somebody has to stop and interpret.
  */
-function JobCard({job,view,busy,panel,setPanel,send,pinned,onClose}:{job:FloorWork;view:FloorView;busy:boolean;panel:string|null;setPanel:(p:"record"|"instructions"|"problem"|null)=>void;send:(b:Record<string,unknown>,s:string)=>void;pinned:boolean;onClose?:()=>void}){
+function JobCard({job,view,busy,panel,setPanel,send,pinned,token,onClose}:{job:FloorWork;view:FloorView;busy:boolean;panel:string|null;setPanel:(p:"record"|"instructions"|"problem"|null)=>void;send:(b:Record<string,unknown>,s:string)=>void;pinned:boolean;token?:string;onClose?:()=>void}){
   const pct=job.quantity?Math.min(100,Math.round(job.good/job.quantity*100)):0;
   const order=view.orders.find(o=>o.id===job.orderId);
   const stage=job.stage;
@@ -214,7 +226,7 @@ function JobCard({job,view,busy,panel,setPanel,send,pinned,onClose}:{job:FloorWo
     </header>
 
     <div className="wf-job-body">
-      <div className="wf-shot" aria-hidden="true"><Bottle/></div>
+      <Shot photo={job.build.photo} alt={job.item} token={token}/>
       <div className="wf-job-head">
         <h2>{job.item}</h2>
         <p className="wf-sub">Job {job.id}{order?<> · Customer order {order.id} · {order.customer}</>:<> · {job.purpose}</>}</p>
@@ -317,12 +329,12 @@ function Fact({label,value}:{label:string;value:string}){
   return <div className="wf-fact"><span>{label}</span><b>{value}</b></div>;
 }
 
-function NextCard({job,onOpen}:{job:FloorWork;onOpen:()=>void}){
+function NextCard({job,token,onOpen}:{job:FloorWork;token?:string;onOpen:()=>void}){
   const state=job.hold?job.hold.reason:!job.ready.ok?`Short ${job.ready.missing[0]}`:STAGE_LABEL[job.stage];
   const tone=job.hold?"stop":!job.ready.ok?"wait":job.stage===1?"go":"";
   return <article className={`wf-card${job.priority==="rush"?" rush":""}`}>
     <div className="wf-card-top">
-      <div className="wf-shot small" aria-hidden="true"><Bottle/></div>
+      <Shot photo={job.build.photo} alt={job.item} token={token} small/>
       <div className="wf-card-name">
         <b>{job.item}</b>
         <small>Job {job.id} · {job.line}</small>
@@ -480,7 +492,22 @@ function Problem({reasons,busy,onSave,onCancel}:{reasons:string[];busy:boolean;o
   </div>;
 }
 
-/** A bottle, drawn rather than photographed: there is nowhere to keep a product photo yet. */
+/**
+ * The product. A photo when the office has put one on the item, the drawing when it has not — a picture
+ * identifies a bottle across a bench far faster than a name one word different from its neighbour.
+ */
+function Shot({photo,alt,token,small}:{photo?:string;alt:string;token?:string;small?:boolean}){
+  return <div className={`wf-shot${small?" small":""}`}>
+    {photo
+      // Served by our own API route and already resized before it was stored; this deployment has no
+      // image optimiser for next/image to use.
+      // eslint-disable-next-line @next/next/no-img-element
+      ?<img src={token?`${photo}&t=${encodeURIComponent(token)}`:photo} alt={alt} className="wf-photo"/>
+      :<Bottle/>}
+  </div>;
+}
+
+/** A bottle, drawn — what is shown until somebody photographs the real one. */
 function Bottle(){
   return <svg viewBox="0 0 64 96" className="wf-bottle" role="img" aria-label="Bottle">
     <path d="M26 6h12v9c0 2 1 3 3 4l6 3c4 2 7 6 7 11v52c0 4-3 7-7 7H17c-4 0-7-3-7-7V33c0-5 3-9 7-11l6-3c2-1 3-2 3-4z"

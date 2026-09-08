@@ -3,7 +3,7 @@
 // Authenticated by the token in the link, not by a session — see app/server/floor.ts for what that
 // buys the holder, which is deliberately very little. Note what is NOT here: no PUT that takes a
 // company record. The tablet can ask for three things to happen and nothing else.
-import { audit, readState, writeState, StateConflictError } from "../../server/db";
+import { audit, listPhotos, readState, writeState, StateConflictError } from "../../server/db";
 import { applyFloorAction, floorActor, floorView, tokenMatches, type FloorAction } from "../../server/floor";
 
 // no-store on the refusal as well as the answer. The whole security surface of this endpoint is a
@@ -16,7 +16,7 @@ export async function GET(request:Request){
   try{
     const row=await readState();
     if(!tokenMatches(tokenFrom(request),row.payload.settings?.warehouseToken))return deny();
-    return Response.json({ok:true,view:floorView(row.payload),version:row.version},
+    return Response.json({ok:true,view:floorView(row.payload,await listPhotos()),version:row.version},
       // A shared link must not be cached by anything between the tablet and here.
       {headers:NO_STORE});
   }catch(error){console.error("floor read failed",error);return Response.json({error:"The schedule is temporarily unavailable"},{status:503})}
@@ -40,7 +40,7 @@ export async function POST(request:Request){
         // unauthenticated page, and it is about to be written into the audit log.
         await writeState(result.data,floorActor(body.by),result.action,result.summary,row.version);
         const after=await readState();
-        return Response.json({ok:true,view:floorView(after.payload),version:after.version},{headers:NO_STORE});
+        return Response.json({ok:true,view:floorView(after.payload,await listPhotos()),version:after.version},{headers:NO_STORE});
       }catch(e){
         if(e instanceof StateConflictError&&attempt===0)continue;   // someone saved first; redo on theirs
         throw e;

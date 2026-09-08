@@ -71,7 +71,11 @@ export function tokenMatches(supplied:string|null|undefined,stored:string|null|u
  * Everything the tablet is allowed to see, built field by field. Nothing is spread from the company
  * record — every value here was chosen.
  */
-export function floorView(data:AppData):FloorView{
+export function floorView(data:AppData,photos:{item:string;updatedAt:string}[]=[]):FloorView{
+  const photoUrl=(item:string)=>{
+    const p=photos.find(x=>x.item===item);
+    return p?`/api/photo?item=${encodeURIComponent(item)}&v=${encodeURIComponent(p.updatedAt)}`:undefined;
+  };
   const from=shift(-WINDOW_BACK),to=shift(WINDOW_FORWARD);
   const days=(data.prodDays||[]).filter(d=>d.date>=from&&d.date<=to)
     .map(d=>({date:d.date,forWhat:d.forWhat,milestone:d.milestone,
@@ -99,7 +103,7 @@ export function floorView(data:AppData):FloorView{
       build:{item:w.item,sub:rate?.sub,size:/3[- ]?gal/i.test(w.item)?"3 gallon":/5[- ]?gal/i.test(w.item)?"5 gallon":undefined,
         mold:rate?.mold,colour:rate?.colour,material:rate?.material,caps:rate?.caps||[],label:rate?.label,
         boxSize:rate?.boxSize,perCase:rate?.unitsPerCase,casesPerPallet:rate?.casesPerPallet,
-        palletPattern:rate?.palletPattern,instructions:rate?.instructions,photo:rate?.photo,
+        palletPattern:rate?.palletPattern,instructions:rate?.instructions,photo:photoUrl(w.item)||rate?.photo,
         qcChecks:rate?.qcChecks||[]},
       ...(forecast?{rate:{perHour:forecast.perHour,finishAt:forecast.finishAt}}:{}),
       packing:{...packingPlan(w,data.itemRates),record:w.packing},

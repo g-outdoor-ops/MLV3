@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { newFloorToken, STAGES, STAGE_NEW, STAGE_QUOTED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, documentTotal, dueDays, freeStock, orderTotals, seedData, stageOf, hasDemoData, type InventoryRow } from "../app-data";
 import { authCall, qboCall, type AuthUser } from "./auth";
+import { listPhotoItems, removePhoto, savePhoto } from "./photo";
 import { CheckRow, ControlMetric, Decision, Kpi, MiniRow, PlRow, ReportCard, SettingRow, StatusLine, downloadCsv, num, useApp, usd, usd2 } from "./store";
 import { Customers, DocList, Leads, OrdersPage } from "./sales";
 
@@ -101,6 +102,7 @@ export function InventoryWorkspace(){
     <article className="panel ops-table"><div className="ops-head"><span>Item</span><span>On hand</span><span>Promised</span><span>Free</span><span>Status</span></div>{fin.map(i=>{const st=stockState(i);const covering=data.workOrders.find(w=>w.item===i.item&&w.status!=="Done");return <button key={i.id} className={st==="Good"?"":"alert"} onClick={()=>st==="Good"?setModal("movement"):covering?notify(`${covering.id} (${covering.status}) is already covering ${i.item}`,"Work orders"):makeRun(i.item)}><span>{i.item}</span><span>{num(i.onHand)}</span><span>{num(i.committed)}</span><span>{num(freeStock(i))}</span><span className={st==="Good"?"paid":"danger"}>{st}{covering&&st!=="Good"?` · ${covering.id}`:""}</span></button>})}</article>
     <h2 style={{margin:"18px 0 8px"}}>Raw materials &amp; packaging</h2>
     <article className="panel ops-table"><div className="ops-head"><span>Item</span><span>On hand</span><span>Reorder at</span><span>On order</span><span>Status</span></div>{raw.map(r=>{const st=stockState(r);return <button key={r.id} className={st==="Good"?"":"alert"} onClick={()=>st==="Good"||r.onOrder?setModal("movement"):setModal("po",r.item)}><span>{r.item}<small style={{display:"block",color:"#7b867f"}}>{r.usage?`${r.usage} · `:""}{usd2(r.cost)} each{r.supplier?` · ${r.supplier}`:""}</small></span><span>{num(r.onHand)}</span><span>{num(r.reorder)}</span><span>{r.onOrder?`${num(r.onOrder)} · ${r.eta}`:"—"}</span><span className={st==="Good"?"paid":"danger"}>{st==="Good"?"Good":r.onOrder?"Covered":"Order now"}</span></button>})}</article>
+    <ProductPhotos/>
     <p className="link-warning" style={{marginTop:12}}>Counts wrong? <button className="link-button" onClick={()=>setModal("movement")}>Record a movement</button> to correct any line — every change is logged. Receiving a PO rolls freight and duty into the unit cost.{" "}<button className="link-button" onClick={()=>{commit(v=>({...v,inventory:v.inventory.map(i=>({...i,committed:v.orders.filter(o=>stageOf(o)<STAGE_SHIPPED&&o.status!=="Needs approval").reduce((a,o)=>a+(orderTotals(o,v).lines.find(l=>l.item===i.item)?.quantity||0),0)}))}),"inventory.recalc","Promised quantities recalculated");notify("Promised quantities recalculated from open orders","Inventory")}}>Recalculate promised</button></p></>;
 }
 
@@ -216,6 +218,65 @@ export function SettingsWorkspace(){
  * and replacing it is one button away for the day a phone goes missing. What it opens is narrow by
  * design: the schedule, the steps, and the runs. No customers' details, no prices, no invoices.
  */
+/**
+ * Product photos, kept beside the stock they belong to.
+ *
+ * The floor packs from a picture faster than from a name — "5 Gal + 2 Screw Caps" and "5 Gal + 1
+ * Silicone Cap" are one word apart on a screen and obvious side by side in a photograph. Photos are
+ * keyed by the item name, so the same picture shows on the warehouse tablet, the build sheet and here.
+ */
+export function ProductPhotos(){
+  const {data,notify,role}=useApp();
+  const [urls,setUrls]=useState<Record<string,string>>({});
+  const [busy,setBusy]=useState("");
+  const [err,setErr]=useState("");
+  const items=data.inventory.filter(i=>i.kind!=="raw").map(i=>i.item);
+  useEffect(()=>{listPhotoItems().then(setUrls).catch(()=>{})},[]);
+  if(role!=="owner")return null;
+  const pick=async(item:string,file?:File)=>{
+    if(!file)return;
+    setBusy(item);setErr("");
+    try{
+      const url=await savePhoto(item,file);
+      setUrls(u=>({...u,[item]:url}));
+      notify(`Photo saved for ${item} — the floor sees it now`,"Inventory");
+    }catch(e){setErr(e instanceof Error?e.message:"That photo could not be saved")}
+    setBusy("");
+  };
+  const clear=async(item:string)=>{
+    setBusy(item);setErr("");
+    try{await removePhoto(item);setUrls(u=>{const n={...u};delete n[item];return n})}
+    catch(e){setErr(e instanceof Error?e.message:"That photo could not be removed")}
+    setBusy("");
+  };
+  return <section className="panel photo-panel">
+    <div className="panel-title"><div><h2>Product photos</h2><p>What the floor sees on the tablet when they pack an order. A picture identifies a bottle faster than a name does.</p></div></div>
+    {err&&<p className="form-error">{err}</p>}
+    <div className="photo-grid">
+      {items.map(item=><div className="photo-cell" key={item}>
+        <div className="photo-frame">
+          {urls[item]
+            // Served by our own API route and already resized in the browser; this deployment has no
+            // image optimiser for next/image to use.
+            // eslint-disable-next-line @next/next/no-img-element
+            ?<img src={urls[item]} alt={item}/>
+            :<span>No photo</span>}
+        </div>
+        <b>{item}</b>
+        <div className="photo-actions">
+          <label className="link-button">
+            {busy===item?"Working…":urls[item]?"Replace":"Add photo"}
+            <input type="file" accept="image/*" hidden disabled={!!busy} onChange={e=>{pick(item,e.target.files?.[0]);e.target.value=""}}/>
+          </label>
+          {urls[item]&&<button className="link-button" disabled={!!busy} onClick={()=>clear(item)}>Remove</button>}
+        </div>
+      </div>)}
+      {!items.length&&<p className="empty-list">Add a finished product first and its photo can live here.</p>}
+    </div>
+    <p className="link-warning">Photos are resized in the browser before they are saved, and kept in the company database — not on the web server&apos;s disk, which is wiped on every deploy.</p>
+  </section>;
+}
+
 export function WarehouseLink(){
   const {data,commit,notify}=useApp();
   const [copied,setCopied]=useState(false);
