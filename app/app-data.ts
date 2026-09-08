@@ -25,7 +25,106 @@ export type QcCheck={label:string;result:boolean|null};
 // `kind` says which station this run is on, and so what its good units eat: moulding pulls preforms,
 // assembly pulls caps. Without it an assembly run deducted PET preforms that had already been consumed
 // when the bottle was blown. Runs written before this are moulding.
-export type WorkOrder={id:string;orderId?:string;kind?:"mould"|"assembly";item:string;quantity:number;good:number;scrap:number;packed:number;date:string;status:string;purpose:string;line?:string;days?:number;qc?:QcCheck[];qcNote?:string;qcResult?:"pass"|"hold"|"scrap"|null};
+export type WorkOrder={id:string;orderId?:string;kind?:"mould"|"assembly";item:string;quantity:number;good:number;scrap:number;packed:number;date:string;status:string;purpose:string;line?:string;days?:number;qc?:QcCheck[];qcNote?:string;qcResult?:"pass"|"hold"|"scrap"|null;
+  // ---- the job traveller ----
+  // `status` above is the word the office screens have always used. These carry the finer state the
+  // floor works in: which stage of the journey the job is at, who is on it, when each stage was
+  // reached, and what is stopping it. Both are written together so neither view is ever out of date.
+  jobStage?:number;paused?:boolean;hold?:JobHold;rework?:boolean;
+  operator?:string;startedAt?:string;dueAt?:string;priority?:JobPriority;history?:JobStamp[]};
+// ---- the job traveller -------------------------------------------------------------
+// A schedule card says what is planned. A traveller says where the thing actually is: molded, checked,
+// packed, on the dock. The floor needs the second one — "what do I do next" is not answerable from a
+// date and a quantity.
+export const JOB_STAGES=["Not started","In production","Ready for QC","Packaging","Ready to ship","Complete"] as const;
+export const JOB_NOT_STARTED=0,JOB_PRODUCTION=1,JOB_QC=2,JOB_PACKAGING=3,JOB_READY_SHIP=4,JOB_COMPLETE=5;
+export type JobPriority="rush"|"normal"|"hold";
+export type JobStamp={stage:number;at:string;by:string};
+export type JobHold={reason:string;note?:string;by:string;at:string};
+/** The reasons the floor can give in one tap. "Other" takes a note. */
+export const HOLD_REASONS=["Machine down","Material unavailable","Wrong or damaged material","Quality problem",
+  "Tooling / mould problem","Packaging unavailable","Waiting for instructions","Quantity mismatch","Other"];
+
+// The office screens read `status` and there are sixty of them, so the two vocabularies are mapped in
+// one place rather than rewritten everywhere. Legacy "Done" means the run finished under the old flow,
+// which is the end of the line; a job that reaches QC under the new one is set explicitly.
+const LEGACY_TO_JOB:Record<string,number>={"Needs scheduling":JOB_NOT_STARTED,"Scheduled":JOB_NOT_STARTED,
+  "Released":JOB_NOT_STARTED,"Running":JOB_PRODUCTION,"Paused":JOB_PRODUCTION,"QC hold":JOB_QC,"Done":JOB_COMPLETE};
+const JOB_TO_LEGACY:Record<number,string>={0:"Scheduled",1:"Running",2:"QC hold",3:"Done",4:"Done",5:"Done"};
+
+export const jobStageOf=(w:WorkOrder)=>w.jobStage??LEGACY_TO_JOB[w.status]??JOB_NOT_STARTED;
+export const jobPaused=(w:WorkOrder)=>w.paused??w.status==="Paused";
+export const jobBlocked=(w:WorkOrder)=>!!w.hold;
+export const jobRemaining=(w:WorkOrder)=>Math.max(0,w.quantity-w.good);
+/** Rush is inherited from the order it is for — the customer is in a bind, not the work order. */
+export const jobPriority=(w:WorkOrder,orders:OrderRecord[]=[]):JobPriority=>
+  w.priority||(w.orderId&&orders.find(o=>o.id===w.orderId)?.rush?"rush":"normal");
+
+/** Move a job along, stamping who did it and when, and keeping the office's word for it in step. */
+export function setJobStage(w:WorkOrder,stage:number,by:string,now=new Date().toISOString()):WorkOrder{
+  const legacy=stage===JOB_NOT_STARTED
+    ?(w.status==="Needs scheduling"||w.status==="Released"?w.status:"Scheduled")
+    :JOB_TO_LEGACY[stage]||w.status;
+  return {...w,jobStage:stage,paused:false,hold:undefined,status:legacy,
+    ...(stage===JOB_PRODUCTION&&!w.startedAt?{startedAt:now,operator:by}:{}),
+    ...(stage===JOB_PRODUCTION?{operator:by}:{}),
+    history:[...(w.history||[]),{stage,at:now,by}]};
+}
+export const pauseJob=(w:WorkOrder,by:string,now=new Date().toISOString()):WorkOrder=>
+  ({...w,paused:true,status:"Paused",history:[...(w.history||[]),{stage:jobStageOf(w),at:now,by}]});
+export const resumeJob=(w:WorkOrder,by:string,now=new Date().toISOString()):WorkOrder=>
+  ({...w,paused:false,hold:undefined,status:jobStageOf(w)===JOB_PRODUCTION?"Running":w.status,
+    history:[...(w.history||[]),{stage:jobStageOf(w),at:now,by}]});
+/** Something is stopping the job. It stays where it is; the office sees it blocked immediately. */
+export const blockJob=(w:WorkOrder,hold:Omit<JobHold,"at">,now=new Date().toISOString()):WorkOrder=>
+  ({...w,paused:true,status:"Paused",hold:{...hold,at:now},
+    history:[...(w.history||[]),{stage:jobStageOf(w),at:now,by:hold.by}]});
+/** How long a job has been stopped, in whole minutes. */
+export const blockedFor=(w:WorkOrder,now=Date.now())=>
+  w.hold?Math.max(0,Math.round((now-new Date(w.hold.at).getTime())/60000)):0;
+
+/**
+ * The rate a job is actually running at, and when it will finish at that rate. Nothing is guessed from
+ * a standard: it is what this operator has made on this machine since they started, which is the only
+ * figure worth putting in front of somebody who has to promise a time.
+ */
+export function jobForecast(w:WorkOrder,now=Date.now()){
+  if(!w.startedAt||w.good<=0)return null;
+  const minutes=(now-new Date(w.startedAt).getTime())/60000;
+  if(minutes<1)return null;
+  const perHour=Math.round(w.good/minutes*60);
+  if(perHour<=0)return null;
+  const left=jobRemaining(w);
+  return {perHour,minutesLeft:Math.round(left/perHour*60),finishAt:new Date(now+left/perHour*3600000).toISOString()};
+}
+
+export type MaterialCheck={item:string;need:number;have:number;ok:boolean;tracked:boolean};
+/**
+ * Whether the job can actually be run and packed. Anything the warehouse counts is checked against what
+ * is free; anything it does not count — the mould, the machine — is listed as untracked rather than
+ * given a tick it has not earned. Starting a run that cannot be packaged is the thing this prevents.
+ */
+export function jobReadiness(w:WorkOrder,data:AppData){
+  const need=jobRemaining(w)||w.quantity;
+  const rate=data.itemRates.find(r=>r.item===w.item);
+  const checks:MaterialCheck[]=[];
+  const add=(item:string|undefined,perUnit:number)=>{
+    if(!item)return;
+    const row=data.inventory.find(i=>i.item===item);
+    const want=Math.ceil(perUnit*need);
+    if(!row){checks.push({item,need:want,have:0,ok:true,tracked:false});return}
+    const have=freeStock(row);
+    checks.push({item,need:want,have,ok:have>=want,tracked:true});
+  };
+  for(const use of runConsumption(w,data.itemRates))add(use.item,use.perUnit);
+  // What packing the finished bottles needs, from the build sheet.
+  if(rate?.label)add(rate.label,1);
+  if(rate?.boxItem)add(rate.boxItem,1/(rate.unitsPerCase||1));
+  if(rate?.mold)checks.push({item:rate.mold,need:1,have:0,ok:true,tracked:false});
+  const missing=checks.filter(c=>c.tracked&&!c.ok).map(c=>c.item);
+  return {checks,missing,ready:missing.length===0};
+}
+
 export type CalendarEvent={id:string;day:number;type:"order"|"stock"|"maintenance"|"delivery";title:string};
 export type Notice={id:string;title:string;detail:string;urgent:boolean;read:boolean;createdAt:string;target:string};
 export type Activity={id:string;customerId?:string;title:string;detail:string;actor:string;createdAt:string};
@@ -34,7 +133,11 @@ export type RoleSetting={id:string;name:string;members:string[];permissions:Reco
 // bottle costs but not what it is made from, so nothing could turn a wholesale order into production.
 // An empty string means "deliberately not moulded here" (a cap pack, a bought-in item) and is left
 // alone; undefined means nobody has said yet, and inferBlank has a one-time guess at it.
-export type ItemRate={id:string;item:string;rate:number;minimum:number;discountLimit:number;floor?:number;unitsPerCase?:number;kind?:"finished"|"raw";cost?:number;sub?:string;qcChecks?:string[];material?:string;blankId?:string;caps?:AssemblyCap[]};
+export type ItemRate={id:string;item:string;rate:number;minimum:number;discountLimit:number;floor?:number;unitsPerCase?:number;kind?:"finished"|"raw";cost?:number;sub?:string;qcChecks?:string[];material?:string;blankId?:string;caps?:AssemblyCap[];
+  // The build sheet — what somebody who has never made this before needs in front of them. "5 Gal + 2
+  // Screw Caps" is a name, not an instruction.
+  mold?:string;colour?:string;label?:string;boxItem?:string;boxSize?:string;casesPerPallet?:number;
+  palletPattern?:string;photo?:string;instructions?:string};
 export type InventoryRow={id:string;item:string;onHand:number;committed:number;reorder:number;cost:number;kind?:"finished"|"raw";unit?:string;onOrder?:number;eta?:string;usage?:string;supplier?:string};
 
 // ---- what this shop actually makes -------------------------------------------------
@@ -264,12 +367,14 @@ export const demoData:AppData={
  workOrders:[
   {id:"WO-116",orderId:"SO-1187",item:"5-Gallon Bottle · no cap",quantity:500,good:500,scrap:11,packed:500,date:iso(0),status:"Done",purpose:"Palm Aqua Delivery order",line:"Line 1",days:1,qcResult:"pass"},
   {id:"WO-115",orderId:"SO-1188",item:"3-Gallon Bottle · 2 caps",quantity:120,good:120,scrap:3,packed:0,date:iso(0),status:"QC hold",purpose:"Sunshine Coolers order",line:"Line 2",days:1,qc:DEFAULT_QC.map(l=>({label:l,result:null})),qcResult:null},
-  {id:"WO-118",orderId:"SO-1189",item:"5-Gallon Bottle · 2 caps",quantity:600,good:418,scrap:9,packed:0,date:iso(1),status:"Running",purpose:"Miami Water Co order + stock",line:"Line 1",days:2,qc:DEFAULT_QC.map((l,i)=>({label:l,result:[true,true,null,true,true,null][i]})),qcNote:"Base looked a touch soft on rack 3 — Luis trimmed lamp zone 5 by 3%."},
-  {id:"WO-119",item:"3-Gallon Bottle · 2 caps",quantity:500,good:0,scrap:0,packed:0,date:iso(2),status:"Scheduled",purpose:"Build stock",line:"Line 2",days:2},
+  {id:"WO-118",orderId:"SO-1189",item:"5-Gallon Bottle · 2 caps",quantity:600,good:418,scrap:9,packed:0,date:iso(1),status:"Running",jobStage:JOB_PRODUCTION,operator:"James",startedAt:new Date(Date.now()-166*60000).toISOString(),purpose:"Miami Water Co order + stock",line:"Line 1",days:2,qc:DEFAULT_QC.map((l,i)=>({label:l,result:[true,true,null,true,true,null][i]})),qcNote:"Base looked a touch soft on rack 3 — Luis trimmed lamp zone 5 by 3%."},
+  {id:"WO-119",item:"3-Gallon Bottle · 2 caps",quantity:500,good:0,scrap:0,packed:0,date:iso(2),status:"Paused",purpose:"Build stock",line:"Line 2",days:2,
+   jobStage:JOB_NOT_STARTED,paused:true,hold:{reason:"Packaging unavailable",note:"Shrink wrap ran out — none until the Thursday delivery",by:"James",at:new Date(Date.now()-52*60000).toISOString()}},
   {id:"WO-120",item:"5-Gallon Bottle · no cap",quantity:400,good:0,scrap:0,packed:0,date:iso(3),status:"Scheduled",purpose:"Build stock",line:"Line 1",days:1},
   // Raised from the September plan: it carries the 7th and 8th of the screw-top 5-gal run, and it is
   // the only record of what those two days made.
-  {id:"WO-121",item:"5-Gallon Bottle · 2 caps",quantity:1000,good:620,scrap:14,packed:0,date:"2026-09-07",status:"Running",purpose:"Amazon replenishment",line:"Line 1",days:2},
+  {id:"WO-121",item:"5-Gallon Bottle · 2 caps",quantity:1000,good:620,scrap:14,packed:0,date:"2026-09-07",status:"Running",jobStage:JOB_PRODUCTION,operator:"James",startedAt:new Date(Date.now()-208*60000).toISOString(),
+   dueAt:new Date(new Date().setHours(14,0,0,0)).toISOString(),purpose:"Amazon replenishment",line:"Line 1",days:2},
  ],
  calendar:[],
  notices:[
@@ -287,9 +392,9 @@ export const demoData:AppData={
   {id:"r3",name:"Warehouse",members:["Luis"],permissions:{crm:"none",sales:"view",calendar:"view",financials:"none",operations:"edit",settings:"none"}},
  ],
  itemRates:[
-  {id:"i1",item:"5-Gallon Bottle · 2 caps",sub:"with 2 screw caps",rate:9.9,floor:8.75,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.85,material:"PET preforms · 780g (5-gal)",qcChecks:["Weight (780g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
-  {id:"i2",item:"3-Gallon Bottle · 2 caps",sub:"with 2 screw caps",rate:8.5,floor:7.6,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.1,material:"PET preforms · 560g (3-gal)",qcChecks:["Weight (560g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
-  {id:"i3",item:"5-Gallon Bottle · no cap",sub:"no cap",rate:8.6,floor:7.7,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.4,material:"PET preforms · 780g (5-gal)",qcChecks:["Weight (780g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
+  {id:"i1",item:"5-Gallon Bottle · 2 caps",sub:"with 2 screw caps",mold:"5-gal screw-top mould",colour:"Natural",label:"Labels · 5-gal",boxItem:"Cartons 18×18×10",boxSize:"18×18×10",casesPerPallet:48,palletPattern:"6 per layer, 8 high, stretch-wrapped",instructions:"Caps hand-tightened, not cross-threaded. Label square to the handle.",rate:9.9,floor:8.75,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.85,material:"PET preforms · 780g (5-gal)",qcChecks:["Weight (780g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
+  {id:"i2",item:"3-Gallon Bottle · 2 caps",sub:"with 2 screw caps",mold:"3-gal screw-top mould",colour:"Natural",label:"Labels · 3-gal",boxItem:"Cartons 18×18×10",boxSize:"18×18×10",casesPerPallet:60,palletPattern:"10 per layer, 6 high, stretch-wrapped",rate:8.5,floor:7.6,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.1,material:"PET preforms · 560g (3-gal)",qcChecks:["Weight (560g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
+  {id:"i3",item:"5-Gallon Bottle · no cap",sub:"no cap",mold:"5-gal regular mould",colour:"Natural",label:"Labels · 5-gal",boxItem:"Cartons 18×18×10",boxSize:"18×18×10",casesPerPallet:48,palletPattern:"6 per layer, 8 high, stretch-wrapped",rate:8.6,floor:7.7,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.4,material:"PET preforms · 780g (5-gal)",qcChecks:["Weight (780g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
   {id:"i4",item:"Screw Caps · 10-pack",sub:"pack of 10",rate:3.2,floor:2.4,minimum:10,discountLimit:10,unitsPerCase:20,kind:"finished",cost:0.61,material:"55mm screw caps (bulk)",qcChecks:["Thread fit on 55mm neck","Liner seated","Visual · flash / short shots"]},
   {id:"i5",item:"Silicone Caps · 3-pack",sub:"pack of 3",rate:4.99,floor:3.8,minimum:10,discountLimit:10,unitsPerCase:30,kind:"finished",cost:1.15,material:"Silicone caps (bulk)",qcChecks:["Seal test on 55mm neck","Visual · tears / voids"]},
  ],
@@ -299,6 +404,8 @@ export const demoData:AppData={
   {id:"s3",item:"5-Gallon Bottle · no cap",kind:"finished",onHand:830,committed:500,reorder:250,cost:4.4,unit:"bottles"},
   {id:"s4",item:"Screw Caps · 10-pack",kind:"finished",onHand:2140,committed:0,reorder:1000,cost:0.61,unit:"packs"},
   {id:"s5",item:"Silicone Caps · 3-pack",kind:"finished",onHand:18,committed:0,reorder:100,cost:1.15,unit:"packs"},
+  {id:"s12",item:"Labels · 5-gal",kind:"raw",onHand:7400,committed:0,reorder:2000,cost:0.04,unit:"labels"},
+  {id:"s13",item:"Labels · 3-gal",kind:"raw",onHand:1800,committed:0,reorder:2000,cost:0.04,unit:"labels"},
   {id:"r1",item:"PET preforms · 780g (5-gal)",kind:"raw",onHand:6200,committed:0,reorder:4000,cost:1.92,unit:"pcs",usage:"~1,200/day",supplier:"ResinCo"},
   {id:"r2",item:"PET preforms · 560g (3-gal)",kind:"raw",onHand:1450,committed:0,reorder:2000,cost:1.48,unit:"pcs",onOrder:8000,eta:label(7),usage:"~900/day",supplier:"ResinCo"},
   {id:"r3",item:"55mm screw caps (bulk)",kind:"raw",onHand:31000,committed:0,reorder:15000,cost:0.061,unit:"pcs",usage:"~2,500/day"},

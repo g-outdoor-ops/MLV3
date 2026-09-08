@@ -1,28 +1,30 @@
 "use client";
-// The warehouse link page.
+// Warehouse Floor — the tablet on the shop floor, opened from the warehouse link with no sign-in.
 //
-// Opened from a link on the shop tablet, with no sign-in. It shows the production schedule, lets the
-// floor complete the steps on it, and lets them update the run they are working on. Everything it can
-// do goes through /api/floor, which builds every change itself — this page cannot send a company
-// record even if someone rewrote it in the browser.
+// This screen used to be a production schedule: a list of what was planned, with the same button under
+// everything saying "record what was made". A schedule tells you what exists. A floor-control screen has
+// to answer one question first — what do I do next — and then carry that job the whole way: moulded,
+// checked, packed, on the dock, with who did each part and when.
 //
-// Built for a tablet in a warehouse: big targets, short words, no dialogs to dismiss with wet hands.
+// So the shape is one job pinned at the top with a single unmistakable action, the rest collapsed
+// underneath, and everything needed to actually run it — the build sheet, the materials, the numbers —
+// on the same screen rather than somewhere else. Everything it can do still goes through /api/floor,
+// which builds every change itself; this page cannot send a company record even if someone rewrote it.
 import { useEffect, useState } from "react";
-import type { FloorView, FloorWork } from "../server/floor";
+import type { FloorBuild, FloorView, FloorWork } from "../server/floor";
 
-const TYPE_LABEL:Record<string,string>={mold:"Mould",assemble:"Assemble",palletize:"Palletize",ship:"Ship"};
+const STAGE_LABEL=["Not started","In production","Ready for QC","Packaging","Ready to ship","Complete"];
+/** The four the operator is walked through. Quality is signed off in the office, not here. */
+const STEPPER=[{stage:1,label:"In Production"},{stage:2,label:"Quality Check"},{stage:3,label:"Packaging"},{stage:4,label:"Ready to Ship"}];
+const TABS=["Now","Today","Upcoming","Completed","Blocked"] as const;
+type Tab=typeof TABS[number];
+
 const num=(n:number)=>Math.round(n).toLocaleString("en-US");
-const RACK=24;
-
-const fmt=(iso:string)=>{
-  const d=new Date(iso+"T12:00:00Z");
-  return d.toLocaleDateString("en-US",{weekday:"long",month:"short",day:"numeric",timeZone:"UTC"});
-};
+const clock=(iso?:string)=>iso?new Date(iso).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}):"";
+const day=(iso:string)=>new Date(iso+"T12:00:00Z").toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",timeZone:"UTC"});
+const ago=(mins:number)=>mins<60?`${mins} min`:`${Math.floor(mins/60)}h ${mins%60}m`;
 
 export default function FloorLinkPage(){
-  // Read straight out of the URL and out of the tablet's own memory during the first render. On the
-  // server there is no window, and the page renders its loading state either way, so the markup the
-  // browser hydrates matches what it was sent.
   const [token]=useState<string|null>(()=>typeof window==="undefined"?null:new URLSearchParams(window.location.search).get("t")||"");
   const remembered=()=>{try{return typeof window==="undefined"?"":localStorage.getItem("ml_floor_name")||""}catch{return ""}};
   const [view,setView]=useState<FloorView|null>(null);
@@ -31,23 +33,26 @@ export default function FloorLinkPage(){
   const [toast,setToast]=useState("");
   const [who,setWho]=useState(remembered);
   const [asking,setAsking]=useState(()=>!remembered());
-  const [open,setOpen]=useState<string|null>(null);      // the step or run being entered
-
+  const [since,setSince]=useState(()=>{try{return typeof window==="undefined"?"":localStorage.getItem("ml_floor_since")||""}catch{return ""}});
+  const [syncedAt,setSyncedAt]=useState("");
   const [tick,setTick]=useState(0);
+
   useEffect(()=>{
     if(!token)return;
     let live=true;
     fetch(`/api/floor?t=${encodeURIComponent(token)}`,{cache:"no-store"})
       .then(r=>r.json())
-      .then((j:{view?:FloorView;error?:string})=>{if(!live)return;if(j.view){setView(j.view);setError("")}else setError(j.error||"This link is not valid.")})
-      .catch(()=>{if(live)setError("No connection. The schedule will load when you are back online.")});
+      .then((j:{view?:FloorView;error?:string})=>{if(!live)return;
+        if(j.view){setView(j.view);setError("");setSyncedAt(new Date().toISOString())}
+        else setError(j.error||"This link is not valid.")})
+      .catch(()=>{if(live)setError("No connection. The floor will load when you are back online.")});
     return ()=>{live=false};
   },[token,tick]);
-  // A shared schedule that is ten minutes stale is worse than useless on a floor, so it refreshes
-  // itself — but only while somebody is actually looking at it.
+  // A floor screen that is ten minutes stale is worse than useless, so it refreshes itself — but only
+  // while somebody is actually looking at it.
   useEffect(()=>{
     if(!token)return;
-    const id=setInterval(()=>{if(document.visibilityState==="visible")setTick(t=>t+1)},60000);
+    const id=setInterval(()=>{if(document.visibilityState==="visible")setTick(t=>t+1)},45000);
     return ()=>clearInterval(id);
   },[token]);
   useEffect(()=>{if(!toast)return;const id=setTimeout(()=>setToast(""),3200);return ()=>clearTimeout(id)},[toast]);
@@ -60,139 +65,339 @@ export default function FloorLinkPage(){
         body:JSON.stringify({...body,by:who})});
       const j=await r.json() as {view?:FloorView;error?:string};
       if(!r.ok||!j.view){setToast(j.error||"That could not be saved");setBusy(false);return}
-      setView(j.view);setOpen(null);setToast(said);
+      setView(j.view);setSyncedAt(new Date().toISOString());setToast(said);
     }catch{setToast("No connection — nothing was saved")}
     setBusy(false);
   };
 
-  if(token==="")return <Shell><p className="floor-link-empty">This link is missing its code. Ask the owner to send it again.</p></Shell>;
-  if(error)return <Shell><p className="floor-link-empty">{error}</p></Shell>;
-  if(!view)return <Shell><p className="floor-link-empty">Loading the schedule…</p></Shell>;
+  if(token==="")return <Shell><p className="wf-empty">This link is missing its code. Ask the owner to send it again.</p></Shell>;
+  if(error)return <Shell><p className="wf-empty">{error}</p></Shell>;
+  if(!view)return <Shell><p className="wf-empty">Loading the floor…</p></Shell>;
 
-  return <FloorLinkScreen view={view} who={who} setWho={setWho} asking={asking} setAsking={setAsking}
-    open={open} setOpen={setOpen} busy={busy} toast={toast} send={send}/>;
+  return <FloorScreen view={view} who={who} setWho={setWho} asking={asking} setAsking={setAsking}
+    busy={busy} toast={toast} send={send} syncedAt={syncedAt} since={since} setSince={setSince} refresh={()=>setTick(t=>t+1)}/>;
 }
 
-/**
- * The screen itself, separated from the loading of it so it can be rendered against a known view —
- * a tablet page nobody can sign into is otherwise very hard to look at.
- */
-export function FloorLinkScreen({view,who,setWho,asking,setAsking,open,setOpen,busy,toast,send}:{
+/** Separated from the loading of it so the screen can be rendered against a known floor. */
+export function FloorScreen({view,who,setWho,asking,setAsking,busy,toast,send,syncedAt,since,setSince,refresh}:{
   view:FloorView;who:string;setWho:(v:string)=>void;asking:boolean;setAsking:(v:boolean)=>void;
-  open:string|null;setOpen:(v:string|null)=>void;busy:boolean;toast:string;
-  send:(body:Record<string,unknown>,said:string)=>void;
+  busy:boolean;toast:string;send:(body:Record<string,unknown>,said:string)=>void;syncedAt:string;
+  since?:string;setSince?:(v:string)=>void;refresh:()=>void;
 }){
-  const days=view.days.filter(d=>d.date>=view.today||d.steps.some(s=>!s.done));
-  const name=(target:string)=>view.blanks.find(b=>b.id===target)?.name||view.skus.find(s=>s.id===target)?.name||target;
-  const orderFor=(id?:string)=>view.orders.find(o=>o.id===id);
+  const [tab,setTab]=useState<Tab>("Today");
+  const [station,setStation]=useState("All stations");
+  const [open,setOpen]=useState<string|null>(null);      // a job the operator asked to look at
+  const [panel,setPanel]=useState<"record"|"instructions"|"problem"|null>(null);
 
-  return <Shell company={view.company}>
-    <div className="floor-link-who">
-      {asking?<form onSubmit={e=>{e.preventDefault();const n=who.trim();if(!n)return;try{localStorage.setItem("ml_floor_name",n)}catch{/* private browsing */}setAsking(false)}}>
-        <label>Your first name<input value={who} onChange={e=>setWho(e.target.value)} placeholder="so the office knows who recorded it"/></label>
-        <button className="primary" type="submit">Start</button>
-      </form>:<p>Recording as <b>{who||"Warehouse"}</b> <button className="link-button" onClick={()=>setAsking(true)}>change</button></p>}
+  const atStation=(w:FloorWork)=>station==="All stations"||w.line===station;
+  const inTab=(w:FloorWork)=>{
+    if(tab==="Blocked")return !!w.hold;
+    if(tab==="Completed")return w.stage>=4;
+    if(tab==="Now")return w.stage===1&&!w.paused;
+    if(tab==="Upcoming")return w.date>view.today;
+    return w.date<=view.today&&w.stage<4;                 // Today
+  };
+  const jobs=view.workOrders.filter(atStation);
+  const shown=jobs.filter(inTab).sort(order);
+  // What to do next: whatever is already running, then rush, then the earliest date.
+  const next=jobs.filter(w=>!w.hold&&w.stage<4).sort(order)[0];
+  const focus=(open&&jobs.find(w=>w.id===open))||next;
+  const rest=shown.filter(w=>w.id!==focus?.id);
+  const blocked=jobs.filter(w=>w.hold);
+
+  return <Shell company={view.company} who={who} station={station} syncedAt={syncedAt} since={since}>
+    <nav className="wf-tabs">
+      <div className="wf-tabset">
+        {TABS.map(t=><button key={t} className={tab===t?"on":""} onClick={()=>setTab(t)}>
+          {t}{t==="Blocked"&&blocked.length>0?<i className="wf-pip">{blocked.length}</i>:null}
+        </button>)}
+      </div>
+      <div className="wf-stations">
+        {["All stations",...view.stations].map(s=><button key={s} className={station===s?"on":""} onClick={()=>setStation(s)}>{s}</button>)}
+      </div>
+    </nav>
+
+    {asking&&<div className="wf-who">
+      <form onSubmit={e=>{e.preventDefault();const n=who.trim();if(!n)return;const at=new Date().toISOString();try{localStorage.setItem("ml_floor_name",n);localStorage.setItem("ml_floor_since",at)}catch{/* private browsing */}setSince?.(at);setAsking(false)}}>
+        <label>Your first name<input value={who} onChange={e=>setWho(e.target.value)} placeholder="so every entry says who made it"/></label>
+        <button className="wf-btn primary" type="submit">Start</button>
+      </form>
+    </div>}
+
+    <div className="wf-body">
+      <div className="wf-main">
+        {focus
+          ?<JobCard job={focus} view={view} busy={busy} panel={panel} setPanel={setPanel} send={send}
+             pinned={focus.id===next?.id} onClose={open?()=>{setOpen(null);setPanel(null)}:undefined}/>
+          :<article className="wf-job"><p className="wf-empty">Nothing to do at this station right now.</p></article>}
+
+        {rest.length>0&&<section className="wf-next">
+          <h2>{tab==="Today"?"Up next today":tab}</h2>
+          <div className="wf-next-grid">
+            {rest.map(w=><NextCard key={w.id} job={w} onOpen={()=>{setOpen(w.id);setPanel(null);window.scrollTo(0,0)}}/>)}
+          </div>
+        </section>}
+
+        {blocked.map(w=><div key={w.id} className="wf-alert">
+          <span><b>{w.id} is blocked</b> · {w.hold?.reason}{w.hold?.note?` — ${w.hold.note}`:""} · stopped {ago(w.blockedMinutes)} ago by {w.hold?.by}</span>
+          <button onClick={()=>{setOpen(w.id);setPanel(null);window.scrollTo(0,0)}}>View issue ›</button>
+        </div>)}
+      </div>
+
+      <aside className="wf-side">
+        <section className="wf-panel">
+          <h2>Shift overview</h2>
+          <div className="wf-tiles">
+            <Tile value={view.shift.active} label="Active" tone="go"/>
+            <Tile value={view.shift.waiting} label="Waiting" tone="wait"/>
+            <Tile value={view.shift.blocked} label="Blocked" tone={view.shift.blocked?"stop":undefined}/>
+            <Tile value={`${num(view.shift.made)} / ${num(view.shift.target)}`} label="Made" tone="go" wide/>
+          </div>
+        </section>
+        <section className="wf-panel">
+          <div className="wf-panel-head"><h2>Live activity</h2><button className="wf-link" onClick={refresh}>Refresh</button></div>
+          {view.activity.length?<ul className="wf-feed">
+            {view.activity.map((e,i)=><li key={i}><i/><span><b>{e.title}</b><small>{e.detail}</small></span><em>{e.at.replace(/^Today · /,"")}</em></li>)}
+          </ul>:<p className="wf-quiet">Nothing recorded yet today.</p>}
+        </section>
+      </aside>
     </div>
 
-    <section className="floor-link-section">
-      <h2>Runs on now</h2>
-      {view.workOrders.length?view.workOrders.map(w=>
-        <Run key={w.id} work={w} order={orderFor(w.orderId)} busy={busy} open={open===w.id}
-          onOpen={()=>setOpen(open===w.id?null:w.id)}
-          onCount={(good,scrap)=>send({op:"wo.progress",woId:w.id,good,scrap},`${w.id} updated`)}
-          onStatus={s=>send({op:"wo.status",woId:w.id,status:s},`${w.id} ${s.toLowerCase()}`)}/>
-      ):<p className="floor-link-none">No runs open. The office releases them.</p>}
-    </section>
-
-    <section className="floor-link-section">
-      <h2>The schedule</h2>
-      {days.length?days.map(day=>
-        <article key={day.date} className={`floor-link-day${day.date===view.today?" today":""}`}>
-          <header>
-            <b>{fmt(day.date)}</b>
-            {day.date===view.today&&<span className="floor-link-today">Today</span>}
-            {day.forWhat&&<small>{day.forWhat}</small>}
-          </header>
-          {day.steps.map(step=>{
-            const order=orderFor(step.linkedTo);
-            return <div key={step.id} className={`floor-link-step${step.done?" done":""}`}>
-              <div className="floor-link-step-top">
-                <span className="floor-link-type">{TYPE_LABEL[step.type]||step.type}</span>
-                <b>{name(step.target)}</b>
-                <span className="floor-link-qty">{num(step.qty)}{step.actualQty!=null&&` · ${num(step.actualQty)} made`}</span>
-              </div>
-              {(order||step.note)&&<p className="floor-link-note">
-                {order&&<em>{order.customer} · {order.id}</em>}
-                {order?.notes||step.note}
-              </p>}
-              {step.workOrderId
-                ?<p className="floor-link-runref">Counted on run {step.workOrderId} — use the run above</p>
-                :step.done
-                ?<p className="floor-link-done">Done{step.doneBy?` · ${step.doneBy}`:""}</p>
-                :open===step.id
-                  ?<Enter label={step.actualQty!=null?`Total made — ${num(step.actualQty)} already recorded`:"How many did you make?"} initial={step.actualQty??step.qty} scrap busy={busy}
-                     onCancel={()=>setOpen(null)}
-                     onSave={(made,scrap)=>send({op:"step.record",stepId:step.id,made,scrap},`${num(made)} recorded`)}/>
-                  :<button className="primary giant" onClick={()=>setOpen(step.id)}>Record what was made</button>}
-            </div>;
-          })}
-          {!day.steps.length&&<p className="floor-link-none">Nothing planned.</p>}
-        </article>
-      ):<p className="floor-link-none">Nothing on the schedule yet.</p>}
-    </section>
-
-    {toast&&<div className="toast">✓ {toast}</div>}
+    {toast&&<div className="wf-toast">✓ {toast}</div>}
   </Shell>;
 }
 
-function Shell({children,company}:{children:React.ReactNode;company?:string}){
-  return <main className="floor-shell floor-link">
-    <header className="floor-top">
-      <div className="logo">Make<span>Logic</span></div>
-      <span className="floor-link-company">{company||""}</span>
-      <span className="no-login-chip">WAREHOUSE</span>
+/** Running first, then rush, then whatever is needed soonest. Blocked work sinks. */
+function order(a:FloorWork,b:FloorWork){
+  const rank=(w:FloorWork)=>(w.hold?3:w.stage===1&&!w.paused?0:w.priority==="rush"?1:2);
+  return rank(a)-rank(b)||a.date.localeCompare(b.date)||a.id.localeCompare(b.id);
+}
+
+function Shell({children,company,who,station,syncedAt,since}:{children:React.ReactNode;company?:string;who?:string;station?:string;syncedAt?:string;since?:string}){
+  return <main className="wf">
+    <header className="wf-top">
+      <div className="wf-brand"><span className="wf-logo">Make<i>Logic</i></span><span className="wf-co">{company||""}</span></div>
+      <h1>Warehouse Floor</h1>
+      <div className="wf-topright">
+        {who?<span className="wf-chip"><i className="wf-avatar">{who.slice(0,1).toUpperCase()}</i>{who}{station&&station!=="All stations"?<em> · {station}</em>:null}</span>:null}
+        {since?<span className="wf-since">On since {clock(since)}</span>:null}
+        <span className={`wf-sync${syncedAt?"":" cold"}`}><i/>{syncedAt?`Synced ${clock(syncedAt)}`:"Not synced yet"}</span>
+      </div>
     </header>
-    <div className="floor-link-body">{children}</div>
+    {children}
   </main>;
 }
 
-/** One open run: the counts, the buttons that move it, and nothing about what it is worth. */
-function Run({work,order,busy,open,onOpen,onCount,onStatus}:{work:FloorWork;order?:{customer:string;id:string;due:string;notes:string};busy:boolean;open:boolean;onOpen:()=>void;onCount:(good:number,scrap:number)=>void;onStatus:(s:string)=>void}){
-  const left=Math.max(0,work.quantity-work.good);
-  const pct=work.quantity?Math.min(100,Math.round(work.good/work.quantity*100)):0;
-  return <article className={`floor-link-run ${work.status==="Running"?"running":""}`}>
-    <header>
-      <div><b>{work.item}</b><small>{work.id} · {work.line}{order?` · ${order.customer}`:` · ${work.purpose}`}</small></div>
-      <span className="floor-link-status">{work.status}</span>
+function Tile({value,label,tone,wide}:{value:number|string;label:string;tone?:"go"|"wait"|"stop";wide?:boolean}){
+  return <div className={`wf-tile${tone?` ${tone}`:""}${wide?" wide":""}`}><strong>{value}</strong><span>{label}</span></div>;
+}
+
+/**
+ * The job in front of the operator. One unmistakable next action, sized for a glove, with every number
+ * labelled — a bare "500" on a screen is a figure somebody has to stop and interpret.
+ */
+function JobCard({job,view,busy,panel,setPanel,send,pinned,onClose}:{job:FloorWork;view:FloorView;busy:boolean;panel:string|null;setPanel:(p:"record"|"instructions"|"problem"|null)=>void;send:(b:Record<string,unknown>,s:string)=>void;pinned:boolean;onClose?:()=>void}){
+  const pct=job.quantity?Math.min(100,Math.round(job.good/job.quantity*100)):0;
+  const order=view.orders.find(o=>o.id===job.orderId);
+  const stage=job.stage;
+  return <article className={`wf-job${job.hold?" blocked":""}${job.priority==="rush"?" rush":""}`}>
+    <header className="wf-job-top">
+      <span className="wf-flag">{job.hold?"BLOCKED":pinned?"DO THIS NEXT":STAGE_LABEL[stage].toUpperCase()}</span>
+      <span className="wf-due">
+        {job.priority==="rush"&&<b>RUSH</b>}
+        {job.dueAt?`Due ${clock(job.dueAt)}`:`Needed ${day(order?.due||job.date)}`}
+        {onClose&&<button className="wf-x" onClick={onClose} aria-label="Back to the job to do next">×</button>}
+      </span>
     </header>
-    {order?.notes&&<p className="floor-link-note"><em>From sales</em>{order.notes}</p>}
-    <div className="progress"><span style={{width:`${pct}%`}}/></div>
-    <p className="floor-link-counts">{num(work.good)} of {num(work.quantity)} made · {num(work.scrap)} scrap · {num(left)} to go</p>
-    <div className="floor-link-actions">
-      <button className="primary giant" disabled={busy||work.status!=="Running"||!left} onClick={()=>onCount(Math.min(RACK,left),0)}>+ {RACK} good</button>
-      <button className="secondary giant" disabled={busy||work.status!=="Running"} onClick={()=>onCount(0,1)}>+ 1 scrap</button>
+
+    <div className="wf-job-body">
+      <div className="wf-shot" aria-hidden="true"><Bottle/></div>
+      <div className="wf-job-head">
+        <h2>{job.item}</h2>
+        <p className="wf-sub">Job {job.id}{order?<> · Customer order {order.id} · {order.customer}</>:<> · {job.purpose}</>}</p>
+        <div className="wf-facts">
+          <Fact label="Station" value={job.line}/>
+          <Fact label="Operator" value={job.operator||"—"}/>
+          <Fact label="Started" value={job.startedAt?clock(job.startedAt):"Not started"}/>
+          <Fact label="Estimated finish" value={job.rate?`${clock(job.rate.finishAt)} · ${num(job.rate.perHour)}/hr`:"—"}/>
+        </div>
+      </div>
     </div>
-    <div className="floor-link-actions">
-      {work.status!=="Running"&&work.status!=="QC hold"&&<button className="secondary" disabled={busy} onClick={()=>onStatus("Running")}>Start run</button>}
-      {work.status==="Running"&&<button className="secondary" disabled={busy} onClick={()=>onStatus("Paused")}>Pause</button>}
-      {work.status==="Running"&&<button className="finish" disabled={busy} onClick={()=>onStatus("QC hold")}>Finish &amp; send to quality</button>}
-      <button className="secondary" onClick={onOpen}>{open?"Close":"Enter a number"}</button>
+
+    {/* Labelled, because "320 / 500" alone asks the reader to work out which number is which. */}
+    <div className="wf-count">
+      <div className="wf-count-main"><strong>{num(job.good)}</strong><span>of {num(job.quantity)} made</span></div>
+      <div className="wf-count-rest">
+        <span><b>{num(job.remaining)}</b> remaining</span>
+        <span><b>{num(job.scrap)}</b> scrap</span>
+        <em>{pct}%</em>
+      </div>
     </div>
-    {open&&<Enter label="How many good bottles to add?" initial={Math.min(RACK,left)||0} scrap busy={busy}
-      onCancel={onOpen} onSave={(good,scrap)=>onCount(good,scrap)}/>}
+    <div className="wf-bar"><i style={{width:`${pct}%`}}/></div>
+
+    <ol className="wf-stepper">
+      {STEPPER.map(s=><li key={s.stage} className={stage>s.stage?"done":stage===s.stage?"on":""}>
+        <i>{stage>s.stage?"✓":s.stage}</i><span>{s.label}</span>
+      </li>)}
+    </ol>
+
+    {job.hold&&<div className="wf-hold">
+      <b>{job.hold.reason}</b>
+      {job.hold.note&&<p>{job.hold.note}</p>}
+      <small>Reported by {job.hold.by} · stopped {ago(job.blockedMinutes)} ago</small>
+      <button className="wf-btn" disabled={busy} onClick={()=>send({op:"job.resume",woId:job.id},`${job.id} back on`)}>Problem fixed — resume</button>
+    </div>}
+
+    <div className="wf-two">
+      <section className="wf-mini">
+        <h3>Materials</h3>
+        <div className="wf-chips">
+          {job.ready.checks.map(c=><span key={c.item} className={!c.tracked?"na":c.ok?"ok":"no"}>
+            {c.item}{c.tracked?(c.ok?" ✓":` · short ${num(c.need-c.have)}`):" · not counted"}
+          </span>)}
+          {!job.ready.checks.length&&<span className="na">Nothing to check</span>}
+        </div>
+      </section>
+      <section className="wf-mini">
+        <h3>Packing</h3>
+        <p className="wf-pack">
+          {job.build.caps.length?job.build.caps.map(c=>`${c.qty} ${c.component.toLowerCase()}`).join(" + "):"no caps"}
+          {job.build.perCase?` • ${job.build.perCase} per case`:""}
+          {job.build.perCase?` • ${num(Math.ceil(job.quantity/job.build.perCase))} cases`:""}
+          {job.build.casesPerPallet?` • ${job.build.casesPerPallet} cases per pallet`:""}
+        </p>
+        {order?.notes&&<p className="wf-note"><b>From sales:</b> {order.notes}</p>}
+      </section>
+    </div>
+
+    <div className="wf-actions">
+      <Primary job={job} busy={busy} onRecord={()=>setPanel(panel==="record"?null:"record")} send={send}/>
+      <button className="wf-btn" onClick={()=>setPanel(panel==="instructions"?null:"instructions")}>View instructions</button>
+      {stage===1&&!job.hold&&<button className="wf-btn" disabled={busy}
+        onClick={()=>send({op:job.paused?"job.resume":"job.pause",woId:job.id},`${job.id} ${job.paused?"resumed":"paused"}`)}>{job.paused?"Resume job":"Pause job"}</button>}
+      {!job.hold&&<button className="wf-btn danger" onClick={()=>setPanel(panel==="problem"?null:"problem")}>Report a problem</button>}
+    </div>
+
+    {panel==="record"&&<Record job={job} busy={busy} onCancel={()=>setPanel(null)}
+      onSave={(good,scrap)=>send({op:"wo.progress",woId:job.id,good,scrap},`${job.id} · ${num(good)} recorded`)}
+      onFinish={()=>send({op:"job.stage",woId:job.id,stage:2},`${job.id} sent to quality`)}/>}
+    {panel==="instructions"&&<Instructions build={job.build} job={job} order={order}/>}
+    {panel==="problem"&&<Problem reasons={view.holdReasons} busy={busy} onCancel={()=>setPanel(null)}
+      onSave={(reason,note)=>send({op:"job.block",woId:job.id,reason,note},`${job.id} reported — the office can see it`)}/>}
   </article>;
 }
 
-/** A number, entered with a keypad-friendly field. Cancel really cancels — nothing is sent. */
-function Enter({label,initial,scrap,busy,onSave,onCancel}:{label:string;initial:number;scrap?:boolean;busy:boolean;onSave:(n:number,scrap:number)=>void;onCancel:()=>void}){
-  const [value,setValue]=useState(String(initial));
-  const [bad,setBad]=useState("0");
-  return <div className="floor-link-enter">
-    <label>{label}<input inputMode="numeric" value={value} onChange={e=>setValue(e.target.value)}/></label>
-    {scrap&&<label>Scrap<input inputMode="numeric" value={bad} onChange={e=>setBad(e.target.value)}/></label>}
-    <div className="floor-link-enter-actions">
-      <button className="secondary" onClick={onCancel}>Cancel</button>
-      <button className="primary" disabled={busy} onClick={()=>onSave(Math.max(0,Number(value)||0),Math.max(0,Number(bad)||0))}>{busy?"Saving…":"Save"}</button>
+/** One action, and it is the right one for where the job actually is. */
+function Primary({job,busy,onRecord,send}:{job:FloorWork;busy:boolean;onRecord:()=>void;send:(b:Record<string,unknown>,s:string)=>void}){
+  if(job.hold)return <button className="wf-btn primary" disabled>Blocked — clear it below</button>;
+  if(job.stage===0)return <button className="wf-btn primary" disabled={busy||!job.ready.ok}
+    onClick={()=>send({op:"job.stage",woId:job.id,stage:1},`${job.id} started`)}>
+    {job.ready.ok?"▶ Start job":`Cannot start — ${job.ready.missing[0]} short`}</button>;
+  if(job.stage===1)return <button className="wf-btn primary" disabled={busy} onClick={onRecord}>▶ Record production</button>;
+  // Quality is signed off in the office, where passing it puts the bottles into stock. The floor is
+  // told where the job is, not asked to sign it off.
+  if(job.stage===2)return <button className="wf-btn primary" disabled>With the office for quality</button>;
+  if(job.stage===3)return <button className="wf-btn primary" disabled={busy}
+    onClick={()=>send({op:"job.stage",woId:job.id,stage:4},`${job.id} packed`)}>Packing done</button>;
+  return <button className="wf-btn primary" disabled={busy}
+    onClick={()=>send({op:"job.stage",woId:job.id,stage:5},`${job.id} handed to shipping`)}>Handed to shipping</button>;
+}
+
+function Fact({label,value}:{label:string;value:string}){
+  return <div className="wf-fact"><span>{label}</span><b>{value}</b></div>;
+}
+
+function NextCard({job,onOpen}:{job:FloorWork;onOpen:()=>void}){
+  const state=job.hold?job.hold.reason:!job.ready.ok?`Short ${job.ready.missing[0]}`:STAGE_LABEL[job.stage];
+  const tone=job.hold?"stop":!job.ready.ok?"wait":job.stage===1?"go":"";
+  return <article className={`wf-card${job.priority==="rush"?" rush":""}`}>
+    <div className="wf-card-top">
+      <div className="wf-shot small" aria-hidden="true"><Bottle/></div>
+      <div className="wf-card-name">
+        <b>{job.item}</b>
+        <small>Job {job.id} · {job.line}</small>
+      </div>
+      <span className={`wf-state ${tone}`}>{state}</span>
+    </div>
+    <div className="wf-card-nums">
+      <span><i>Target</i>{num(job.quantity)}</span>
+      <span><i>Made</i>{num(job.good)}</span>
+      <span><i>Remaining</i>{num(job.remaining)}</span>
+    </div>
+    <button className="wf-btn" onClick={onOpen}>Open job</button>
+  </article>;
+}
+
+/** Recording what came off the machine. Big targets, and nothing sent until Save. */
+function Record({job,busy,onSave,onFinish,onCancel}:{job:FloorWork;busy:boolean;onSave:(good:number,scrap:number)=>void;onFinish:()=>void;onCancel:()=>void}){
+  const [good,setGood]=useState("24");
+  const [scrap,setScrap]=useState("0");
+  return <div className="wf-form">
+    <h3>Record production · {job.id}</h3>
+    <div className="wf-quick">{[24,48,100].map(q=><button key={q} className="wf-btn" onClick={()=>setGood(String(q))}>+{q}</button>)}</div>
+    <label>Good bottles<input inputMode="numeric" value={good} onChange={e=>setGood(e.target.value)}/></label>
+    <label>Scrap<input inputMode="numeric" value={scrap} onChange={e=>setScrap(e.target.value)}/></label>
+    <p className="wf-quiet">{num(job.remaining)} still to make on this job.</p>
+    <div className="wf-form-actions">
+      <button className="wf-btn" onClick={onCancel}>Cancel</button>
+      <button className="wf-btn primary" disabled={busy} onClick={()=>onSave(Math.max(0,Number(good)||0),Math.max(0,Number(scrap)||0))}>{busy?"Saving…":"Save"}</button>
+    </div>
+    {/* The end of a run is the same moment as its last entry, so it is offered here rather than as a
+        fifth button competing with the one thing to press. */}
+    <button className="wf-btn" style={{width:"100%",marginTop:10}} disabled={busy} onClick={onFinish}>That is the lot — send to quality</button>
+  </div>;
+}
+
+/** The build sheet: everything needed to make this correctly without asking anybody. */
+function Instructions({build,job,order}:{build:FloorBuild;job:FloorWork;order?:{notes:string;customer:string}}){
+  const rows:[string,string][]=[
+    ["Product",build.item+(build.sub?` · ${build.sub}`:"")],
+    ["Size",build.size||"—"],
+    ["Mould / tooling",build.mold||"not recorded"],
+    ["Material",build.material||"not recorded"],
+    ["Colour",build.colour||"Natural"],
+    ["Caps",build.caps.length?build.caps.map(c=>`${c.qty} × ${c.component}`).join(" + "):"none"],
+    ["Label",build.label||"not recorded"],
+    ["Box",build.boxSize?`${build.boxSize}${build.perCase?` · ${build.perCase} bottles per case`:""}`:"not recorded"],
+    ["Pallet",build.casesPerPallet?`${build.casesPerPallet} cases per pallet${build.palletPattern?` · ${build.palletPattern}`:""}`:"not recorded"],
+    ["This run",`${num(job.quantity)} bottles${build.perCase?` · ${num(Math.ceil(job.quantity/build.perCase))} cases`:""}`],
+  ];
+  return <div className="wf-form wf-sheet">
+    <h3>Build sheet · {job.item}</h3>
+    <dl>{rows.map(([k,v])=><div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>
+    {build.instructions&&<p className="wf-note"><b>Standing instruction:</b> {build.instructions}</p>}
+    {order?.notes&&<p className="wf-note"><b>For {order.customer}:</b> {order.notes}</p>}
+    {build.qcChecks.length>0&&<><h4>Quality checks the office will run</h4>
+      <ul className="wf-qc">{build.qcChecks.map(c=><li key={c}>{c}</li>)}</ul></>}
+    {!build.mold&&<p className="wf-quiet">Anything reading “not recorded” has not been filled in on this product yet — the office sets it under Item rates.</p>}
+  </div>;
+}
+
+/** Reporting a problem: one tap for the reason, a note when it needs one. */
+function Problem({reasons,busy,onSave,onCancel}:{reasons:string[];busy:boolean;onSave:(reason:string,note:string)=>void;onCancel:()=>void}){
+  const [reason,setReason]=useState("");
+  const [note,setNote]=useState("");
+  return <div className="wf-form">
+    <h3>What is stopping the job?</h3>
+    <div className="wf-reasons">
+      {reasons.map(r=><button key={r} className={`wf-btn${reason===r?" primary":""}`} onClick={()=>setReason(r)}>{r}</button>)}
+    </div>
+    <label>Anything else the office should know{reason==="Other"?" (needed)":""}
+      <input value={note} onChange={e=>setNote(e.target.value)} placeholder="e.g. Molder 2 tripped out at 10:15"/></label>
+    <div className="wf-form-actions">
+      <button className="wf-btn" onClick={onCancel}>Cancel</button>
+      <button className="wf-btn danger solid" disabled={busy||!reason||(reason==="Other"&&!note.trim())}
+        onClick={()=>onSave(reason,note)}>Report it — this stops the job</button>
     </div>
   </div>;
+}
+
+/** A bottle, drawn rather than photographed: there is nowhere to keep a product photo yet. */
+function Bottle(){
+  return <svg viewBox="0 0 64 96" className="wf-bottle" role="img" aria-label="Bottle">
+    <path d="M26 6h12v9c0 2 1 3 3 4l6 3c4 2 7 6 7 11v52c0 4-3 7-7 7H17c-4 0-7-3-7-7V33c0-5 3-9 7-11l6-3c2-1 3-2 3-4z"
+      fill="#e6ebe8" stroke="#aab7ae" strokeWidth="1.5" strokeLinejoin="round"/>
+    <rect x="24" y="2" width="16" height="6" rx="2" fill="#c3cec7"/>
+    <rect x="16" y="46" width="12" height="22" rx="4" fill="none" stroke="#aab7ae" strokeWidth="1.5"/>
+  </svg>;
 }

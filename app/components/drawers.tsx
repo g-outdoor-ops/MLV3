@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { DEFAULT_QC, DEFAULT_SHIP, STAGES, STAGE_NEW, STAGE_INVOICED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, ASSEMBLY_LINE, PROCESSING_FEE_LABEL, canStartProduction, deleteRun, documentBalance, documentTotal, dueDays, dueIso, fmtDay, guardRunEdit, orderTotals, runDeleteImpact, stageOf, todayIso, type Customer, type DocumentRecord, type WorkOrder, fmtDue} from "../app-data";
+import { DEFAULT_QC, DEFAULT_SHIP, STAGES, STAGE_NEW, STAGE_INVOICED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, ASSEMBLY_LINE, JOB_PACKAGING, PROCESSING_FEE_LABEL, canStartProduction, deleteRun, documentBalance, documentTotal, dueDays, dueIso, fmtDay, guardRunEdit, orderTotals, runDeleteImpact, stageOf, todayIso, type Customer, type DocumentRecord, type WorkOrder, fmtDue} from "../app-data";
 import { DetailField, ProfileSection, nextId, now, num, uid, useApp, usd2, type Role } from "./store";
 import { qboCall } from "./auth";
 
@@ -207,7 +207,7 @@ export function RecordDrawer({id,close}:{id:string;close:()=>void}){
     eyebrow="Work order";heading=`${work.id} · ${work.item}`;status=work.status;
     const upd=(patch:Partial<WorkOrder>,action:string,msg:string,extra?:(v:typeof data)=>Partial<typeof data>)=>act(v=>({...v,workOrders:v.workOrders.map(x=>x.id===work.id?{...x,...patch}:x),...(extra?extra(v):{})}),action,`${work.id} ${action}`,msg,"Work orders");
     const setCheck=(i:number,r:boolean)=>commit(v=>({...v,workOrders:v.workOrders.map(x=>x.id===work.id?{...x,qc:checks.map((c,k)=>k===i?{...c,result:r}:c)}:x)}),"qc.check",`${work.id} check`);
-    const pass=()=>upd({qcResult:"pass",status:"Done"},"qc.pass",`${work.id} passed — ${num(work.good)} into stock${so?`; ${so.id} is Ready`:""}`,v=>({inventory:v.inventory.map(row=>row.item===work.item?{...row,onHand:row.onHand+work.good}:row),orders:v.orders.map(o=>o.id===work.orderId&&stageOf(o)<STAGE_READY?{...o,stage:STAGE_READY,stageV2:true,status:STAGES[STAGE_READY]}:o),notices:[{id:uid("n"),title:`${work.id} passed quality`,detail:`${num(work.good)} × ${work.item} into stock${so?` · ${so.id} ready to pack`:""}`,urgent:false,read:false,createdAt:now(),target:"Orders"},...v.notices]}));
+    const pass=()=>upd({qcResult:"pass",status:"Done",jobStage:JOB_PACKAGING,history:[...(work.history||[]),{stage:JOB_PACKAGING,at:new Date().toISOString(),by:user||"Owner"}]},"qc.pass",`${work.id} passed — ${num(work.good)} into stock${so?`; ${so.id} is Ready`:""}`,v=>({inventory:v.inventory.map(row=>row.item===work.item?{...row,onHand:row.onHand+work.good}:row),orders:v.orders.map(o=>o.id===work.orderId&&stageOf(o)<STAGE_READY?{...o,stage:STAGE_READY,stageV2:true,status:STAGES[STAGE_READY]}:o),notices:[{id:uid("n"),title:`${work.id} passed quality`,detail:`${num(work.good)} × ${work.item} into stock${so?` · ${so.id} ready to pack`:""}`,urgent:false,read:false,createdAt:now(),target:"Orders"},...v.notices]}));
     body=<><div className="detail-status"><span>Status</span><b>{work.status}</b></div>
       <DetailField label="Purpose" value={so?`${so.id} · ${customer?.name} · needed ${fmtDue(so.due)}`:work.purpose}/>
       <DetailField label="Planned" value={`${num(work.quantity)} bottles · ${work.line} · ${work.days||1} day${(work.days||1)>1?"s":""} from ${work.date}`}/>

@@ -123,11 +123,85 @@ t("and names the run so the operator knows where to look",shown.workOrderId===on
 const free=data.prodDays.flatMap(d=>d.steps).find(s=>!s.workOrderId&&!s.done);
 t("a step with no run is still recordable from the tablet",!applyFloorAction(data,{op:"step.record",stepId:free.id,made:10}).error);
 
+// ---------------------------------------------------------------------------
+// The job traveller: what the floor screen runs on.
+console.log("\nA job carries where it is, not just what was planned:");
+const {JOB_NOT_STARTED,JOB_PRODUCTION,JOB_QC,JOB_COMPLETE,jobStageOf,setJobStage,pauseJob,blockJob,blockedFor,
+  jobReadiness,jobForecast,jobPriority,runConsumption:rc}=app;
+const running=data.workOrders.find(w=>w.id==="WO-121");
+t("a job knows which stage it is at",jobStageOf(running)===JOB_PRODUCTION);
+// Records written before the traveller existed still read correctly.
+t("an older record is read from the word the office used",jobStageOf({status:"QC hold",quantity:1,good:0,scrap:0})===JOB_QC);
+t("and one that was finished reads as complete",jobStageOf({status:"Done",quantity:1,good:0,scrap:0})===JOB_COMPLETE);
+
+const started=setJobStage({...running,jobStage:JOB_NOT_STARTED,startedAt:undefined,status:"Scheduled"},JOB_PRODUCTION,"Marta","2026-09-07T09:14:00.000Z");
+t("starting a job records who started it",started.operator==="Marta"&&started.startedAt==="2026-09-07T09:14:00.000Z");
+t("and stamps the stage in its history",started.history?.at(-1)?.stage===JOB_PRODUCTION);
+// The office reads `status`; both words have to stay in step or one of the two screens lies.
+t("the office's word for it keeps up",started.status==="Running");
+t("sending it to quality says QC hold",setJobStage(started,JOB_QC,"Marta").status==="QC hold");
+
+console.log("\nStopping a job says why, who and for how long:");
+const stopped=blockJob(running,{reason:"Machine down",note:"Molder 2 tripped out",by:"James"},new Date(Date.now()-90*60000).toISOString());
+t("it is held, not lost",stopped.hold.reason==="Machine down"&&stopped.paused===true);
+t("the office sees it as not running",stopped.status==="Paused");
+t("how long it has been down is known",blockedFor(stopped)>=89&&blockedFor(stopped)<=91,`${blockedFor(stopped)}`);
+t("pausing is not the same as blocking",!pauseJob(running,"James").hold);
+
+console.log("\nA job will not start without what it needs:");
+const ready=jobReadiness(running,data);
+t("materials are checked against free stock",ready.checks.some(c=>c.tracked));
+t("and the mould is listed without a tick it has not earned",ready.checks.some(c=>!c.tracked));
+const bare=normalize({...data,inventory:data.inventory.map(i=>/preform/i.test(i.item)?{...i,onHand:0,committed:0}:i)});
+const short=jobReadiness(running,bare);
+t("an empty shelf stops the job being started",!short.ready&&short.missing.length>0,JSON.stringify(short.missing));
+t("and names what is short",/preform/i.test(short.missing[0]));
+
+console.log("\nThe rate is what this operator actually did:");
+const fc=jobForecast(running);
+t("a running job has a rate",!!fc&&fc.perHour>0,JSON.stringify(fc));
+t("and a finish time from it",!!fc&&/^\d{4}-/.test(fc.finishAt));
+t("a job that has made nothing is not guessed at",jobForecast({...running,good:0})===null);
+t("rush is inherited from the order, not typed on the job",
+  jobPriority({...running,orderId:"SO-X"},[{id:"SO-X",rush:{at:"x",by:"Chris"}}])==="rush");
+
+console.log("\nThe floor screen gets what it needs and nothing more:");
+const v=floorView(data);
+t("each job carries its stage",v.workOrders.every(w=>typeof w.stage==="number"));
+t("its readiness",v.workOrders.every(w=>Array.isArray(w.ready.checks)));
+t("and its build sheet",v.workOrders.some(w=>w.build.mold));
+t("the shift is counted",v.shift.active+v.shift.waiting+v.shift.blocked>0);
+t("the stations are listed",v.stations.length>0);
+t("the reasons for stopping are offered",v.holdReasons.includes("Machine down"));
+// The activity log carries invoice numbers and amounts; none of that belongs on a tablet.
+const feed=JSON.stringify(v.activity);
+t("the live feed carries no money",!/\$/.test(feed));
+t("and no invoice numbers",!/INV-/.test(feed));
+
 console.log("\nNothing about this endpoint may sit in a cache:");
 const route=readFileSyncRoute();
 t("the answer is no-store",/NO_STORE/.test(route)&&/"cache-control":"no-store"/.test(route));
 // A cached 401 in front of a link that works would look exactly like a broken link.
 t("so is the refusal",/const deny=\(\)=>Response\.json\([^)]*status:401,headers:NO_STORE/.test(route.replace(/\n/g," ")));
+
+console.log("\nThe actions the tablet is allowed, and their limits:");
+const job=data.workOrders.find(w=>w.id==="WO-121");
+const waiting=data.workOrders.find(w=>jobStageOf(w)===JOB_NOT_STARTED&&!w.hold);
+t("it can start a job that has not begun",!applyFloorAction(data,{op:"job.stage",woId:waiting.id,stage:JOB_PRODUCTION,by:"James"}).error,waiting?.id);
+// Forward, one step at a time. Skipping quality is how untested bottles reach a customer.
+t("it cannot skip a stage",!!applyFloorAction(data,{op:"job.stage",woId:job.id,stage:4,by:"James"}).error);
+t("it cannot send a job backwards",!!applyFloorAction(data,{op:"job.stage",woId:job.id,stage:0,by:"James"}).error);
+t("nor invent one",!!applyFloorAction(data,{op:"job.stage",woId:job.id,stage:99,by:"James"}).error);
+t("it can pause and resume",!applyFloorAction(data,{op:"job.pause",woId:job.id,by:"James"}).error
+  &&!applyFloorAction(data,{op:"job.resume",woId:job.id,by:"James"}).error);
+const rep=applyFloorAction(data,{op:"job.block",woId:job.id,reason:"Machine down",note:"tripped out",by:"James"});
+t("it can report a problem",!rep.error);
+t("which stops the job where it stands",rep.data.workOrders.find(w=>w.id===job.id).hold.reason==="Machine down");
+t("and says who reported it",rep.data.workOrders.find(w=>w.id===job.id).hold.by==="James");
+// A block with no reason is one nobody can clear without walking to the floor to ask.
+t("a problem needs a reason from the list",!!applyFloorAction(data,{op:"job.block",woId:job.id,reason:"whatever",by:"James"}).error);
+t("and 'Other' needs saying what it is",!!applyFloorAction(data,{op:"job.block",woId:job.id,reason:"Other",by:"James"}).error);
+t("reporting a problem touches nothing outside production",untouched(data,rep.data));
 
 console.log("\nThe audit says the record came from the link, not from a person who signed in:");
 t("an unnamed tablet is still identified",floorActor()==="Warehouse link");

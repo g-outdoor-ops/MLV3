@@ -17,9 +17,8 @@ to invoicing or payments as touching real money.
 
 ## The state of play
 
-`main` is deployed and pushed through **`fb26f61`** — Phases 1-7. Phase 8 is in the tree, uncommitted:
-invoices go out for bank transfer only with a processing fee, and an invoice raised on its own creates
-the order behind it.
+`main` is deployed and pushed through **`733c4f1`** — Phases 1-8. Phase 9 is in the tree, uncommitted:
+the Warehouse Floor screen and the job traveller behind it.
 
 The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
 The production rebuild is `4b2ed00` (Phase 1, model), `8c0bf42` (Phase 2, the calendar) and Phase 3 in
@@ -340,7 +339,7 @@ saying where they came from. Those bottles physically exist; deleting the paperw
 unmaking them. A run that produced nothing simply releases its days. The confirmation says which of the
 two is about to happen.
 
-### Phase 8 — invoices: bank transfer only, and the order behind them (in the tree, uncommitted)
+### Phase 8 — invoices: bank transfer only, and the order behind them (`733c4f1`)
 
 Answers to what the owner asked, and the two changes he chose.
 
@@ -360,6 +359,52 @@ Answers to what the owner asked, and the two changes he chose.
   line with a promised date and the money gate does the rest: it cannot reach a machine until a deposit
   or payment in full lands. That is "created, not finalised until it is paid" in the model that already
   existed.
+
+### Phase 9 — the Warehouse Floor screen (in the tree, uncommitted)
+
+The warehouse link worked but it was a production schedule: a list of what was planned, with the same
+button under everything. It is a floor-control screen now, built to the owner's render — one job pinned
+at the top with a single unmistakable action, everything needed to run it on the same screen, and the
+rest collapsed underneath.
+
+**The job traveller** (`app/app-data.ts`). `WorkOrder` gained a real stage — Not started → In production
+→ Ready for QC → Packaging → Ready to ship → Complete — plus paused, a hold with a reason, the operator,
+start time, priority and a stamped history of who moved it and when. The office's `status` word is
+written alongside it from one mapping, so sixty existing comparisons across the owner, quality and
+packing screens keep working rather than being rewritten.
+
+- `jobReadiness()` checks what the job needs against free stock and **refuses to start** one that is
+  short. What the warehouse does not count — the mould, the machine — is listed as *not counted* rather
+  than given a tick it has not earned.
+- `jobForecast()` gives the rate this operator has actually achieved on this machine and the finish time
+  that follows from it. Nothing is taken from a standard.
+- `HOLD_REASONS` is the nine-reason list from the spec; `blockJob()` stops the job where it stands and
+  `blockedFor()` says how long it has been down.
+- `ItemRate` gained the build sheet: mould, colour, label, box, cases per pallet, pallet pattern and
+  standing instructions, so "5 Gal + 2 Screw Caps" stops being the whole instruction.
+
+**The screen** (`app/floor/page.tsx`, `app/warehouse-floor.css`). Tabs — Now, Today, Upcoming, Completed,
+Blocked with a count — and station filters. The pinned job shows the photo area, the machine, operator,
+start and forecast finish, labelled counts (target, made, remaining, scrap) with a progress bar, the
+four-step tracker, the materials checklist, the packing spec, and exactly four actions. Beside it, the
+shift overview and the live activity feed; underneath, compact next-up cards and a banner per blocked
+job. The feed is built from an **allow-list of production events** — the activity log carries invoice
+numbers and amounts, and a test asserts none of that reaches the tablet.
+
+**Three new endpoint actions** — `job.stage`, `job.pause`/`job.resume`, `job.block` — all still built by
+the server. A stage moves forward one step at a time: skipping quality is how untested bottles reach a
+customer, so it is refused, and so is a block with no reason.
+
+### Still open on the floor screen
+
+- **Packaging has no detail of its own.** The spec asks for cartons and pallets counted, a pallet or
+  batch id, packaging material consumed, and printed pallet labels. Packing is one button today.
+- **No photos.** The build sheet has a drawn bottle, not a picture of the finished item, and a problem
+  cannot carry a photo — there is nowhere to store one.
+- **Quality is still signed off in the office**, because passing it is what puts bottles into stock. The
+  floor is told where the job is rather than asked to sign it.
+- **No kiosk mode and no offline queue.** A dropped connection loses the entry rather than holding it.
+- **Clocked-in time is the tablet's own**, kept in the browser, not a real clock-in record.
 
 ### Still open
 
@@ -440,7 +485,7 @@ on Render before the tablet is handed over.
 
 - **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
   `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
-  Run with `node tests/<name>.test.mjs`. 331 assertions.
+  Run with `node tests/<name>.test.mjs`. 369 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.
