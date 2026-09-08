@@ -21,12 +21,15 @@ import type { User } from "./auth";
 //               access, and the QuickBooks connection
 //   roles     — who can do what
 //   itemRates — the price list, discount floors and product costs
-const OWNER_ONLY = ["settings", "roles", "itemRates"] as const;
+//   blanks/skus — what the machines mould and what those blanks become
+const OWNER_ONLY = ["settings", "roles", "itemRates", "blanks", "skus"] as const;
 
 const LABEL: Record<string, string> = {
   settings: "company settings",
   roles: "roles and access",
   itemRates: "pricing and product costs",
+  blanks: "the moulds and blanks",
+  skus: "the product list",
 };
 
 // Deep value comparison via canonical JSON. Key order is stable here because both sides are produced

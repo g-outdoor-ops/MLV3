@@ -17,8 +17,8 @@ to invoicing or payments as touching real money.
 
 ## The state of play
 
-`main` is deployed and pushed through **`7031496`** — Phases 1-11. Phase 12 is in the tree, uncommitted:
-three fixes reported from use.
+`main` is deployed and pushed through **`07a525e`** — Phases 1-12. Phase 13 is in the tree, uncommitted:
+how a product ships, and an editor for the catalogue the plan schedules against.
 
 The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
 The production rebuild is `4b2ed00` (Phase 1, model), `8c0bf42` (Phase 2, the calendar) and Phase 3 in
@@ -447,7 +447,7 @@ Also: the floor's empty state used to say only "Nothing to do at this station ri
 *why* — no jobs released at all, nothing at this station, or nothing in this tab — because those are
 three different problems with three different fixes.
 
-### Phase 12 — three things reported from use (in the tree, uncommitted)
+### Phase 12 — three things reported from use (`07a525e`)
 
 **"The site randomly refreshes back to dashboard."** A save that lost a version race reloaded the whole
 page, which threw the person back to their home screen. That was tolerable when the only writers were
@@ -471,6 +471,29 @@ typed again, even though `guardStepEdit` has always had a branch for exactly tha
 *Makes* field now. Moulding is chosen from blanks and everything after it from products, and each blank
 is labelled with what it becomes ("Regular 5-gal — for 5-Gallon Bottle · no cap") because nobody orders
 a blank by name.
+
+### Phase 13 — how a product ships, and the catalogue behind the plan (in the tree, uncommitted)
+
+**How it ships.** The item rate form now asks whether a product goes out loose, boxed, or boxed on
+pallets, and only asks for boxes per pallet and the pallet pattern when the answer is pallets. Box size
+and the label stock are editable there too — they were added for the build sheet in Phase 9 and had no
+form. `packingPlan` reads it, so a product that never goes on a pallet stops asking the packing bench
+for a pallet count.
+
+**The catalogue the plan schedules against had no screen at all.** Blanks and SKUs arrived with the
+production model in Phase 1 and were filled in from the app's own `DEFAULT_*` constants, so the calendar
+has been scheduling "Screw-top 5-gal" and "5 Gal + 2 Screw Caps" — products the owner could not see in
+inventory, could not edit, and had never entered. That is now a **Moulds & products** editor on the Item
+rates screen: blanks (name, size, neck, sold plain) and products (code, name, channel, blank, caps),
+with how many plan steps reference each one.
+
+Two guards on it: nothing the plan is using can be removed, and a code cannot be changed once it is
+referenced — the calendar would lose track of what it is making. Edits are held locally and saved in one
+go, because this feeds pricing and planning and a commit per keystroke would put half-typed names
+through the audit log.
+
+`blanks` and `skus` are also **owner-only on the server** now, alongside settings, roles and item rates.
+They are catalogue: a floor tablet had no business being able to rewrite them.
 
 ### Still open on the floor screen
 
@@ -560,7 +583,7 @@ on Render before the tablet is handed over.
 
 - **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
   `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
-  Run with `node tests/<name>.test.mjs`. 402 assertions.
+  Run with `node tests/<name>.test.mjs`. 413 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.

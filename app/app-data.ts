@@ -111,6 +111,7 @@ export type PackingRecord={
   batchId?:string;note?:string;startedAt?:string;doneAt?:string};
 
 export type PackingPlan={
+  packedAs:"loose"|"boxed"|"palletized";
   received:number;perCase:number;cartons:number;casesPerPallet:number;pallets:number;
   caps:AssemblyCap[];label?:string;boxItem?:string;boxSize?:string;palletPattern?:string;
   uses:{item:string;qty:number}[]};
@@ -127,13 +128,14 @@ export function packingPlan(w:WorkOrder,itemRates:ItemRate[]):PackingPlan{
   const received=w.packing?.received??w.good;
   const perCase=rate?.unitsPerCase||1;
   const cartons=Math.ceil(received/perCase);
-  const casesPerPallet=rate?.casesPerPallet||0;
+  const packedAs=rate?.packedAs||(rate?.casesPerPallet?"palletized":"boxed");
+  const casesPerPallet=packedAs==="palletized"?(rate?.casesPerPallet||0):0;
   const pallets=casesPerPallet?Math.ceil(cartons/casesPerPallet):0;
   const uses:{item:string;qty:number}[]=[];
   if(rate?.boxItem&&cartons)uses.push({item:rate.boxItem,qty:cartons});
   if(rate?.label&&received)uses.push({item:rate.label,qty:received});
   if(w.kind!=="assembly")for(const c of rate?.caps||[])uses.push({item:c.component,qty:c.qty*received});
-  return {received,perCase,cartons,casesPerPallet,pallets,caps:rate?.caps||[],
+  return {packedAs,received,perCase,cartons,casesPerPallet,pallets,caps:rate?.caps||[],
     label:rate?.label,boxItem:rate?.boxItem,boxSize:rate?.boxSize,palletPattern:rate?.palletPattern,uses};
 }
 
@@ -212,6 +214,9 @@ export type RoleSetting={id:string;name:string;members:string[];permissions:Reco
 export type ItemRate={id:string;item:string;rate:number;minimum:number;discountLimit:number;floor?:number;unitsPerCase?:number;kind?:"finished"|"raw";cost?:number;sub?:string;qcChecks?:string[];material?:string;blankId?:string;caps?:AssemblyCap[];
   // The build sheet — what somebody who has never made this before needs in front of them. "5 Gal + 2
   // Screw Caps" is a name, not an instruction.
+  // How it leaves: loose, in boxes, or boxed onto pallets. It decides what the packing bench is asked
+  // to count — a product that never goes on a pallet should not be asking anybody for a pallet number.
+  packedAs?:"loose"|"boxed"|"palletized";
   mold?:string;colour?:string;label?:string;boxItem?:string;boxSize?:string;casesPerPallet?:number;
   palletPattern?:string;photo?:string;instructions?:string};
 export type InventoryRow={id:string;item:string;onHand:number;committed:number;reorder:number;cost:number;kind?:"finished"|"raw";unit?:string;onOrder?:number;eta?:string;usage?:string;supplier?:string};

@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
-import { newFloorToken, STAGES, STAGE_NEW, STAGE_QUOTED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, documentTotal, dueDays, freeStock, orderTotals, seedData, stageOf, hasDemoData, type InventoryRow } from "../app-data";
+import { CAP_KINDS, DEFAULT_BLANKS, DEFAULT_SKUS, newFloorToken, STAGES, STAGE_NEW, STAGE_QUOTED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, documentTotal, dueDays, freeStock, orderTotals, seedData, stageOf, hasDemoData, type Blank, type InventoryRow, type Sku } from "../app-data";
 import { authCall, qboCall, type AuthUser } from "./auth";
 import { listPhotoItems, removePhoto, savePhoto } from "./photo";
-import { CheckRow, ControlMetric, Decision, Kpi, MiniRow, PlRow, ReportCard, SettingRow, StatusLine, downloadCsv, num, useApp, usd, usd2 } from "./store";
+import { CheckRow, ControlMetric, Decision, Kpi, MiniRow, PlRow, ReportCard, SettingRow, StatusLine, downloadCsv, num, uid, useApp, usd, usd2 } from "./store";
 import { Customers, DocList, Leads, OrdersPage } from "./sales";
 
 export const ownerGroups=[
@@ -87,7 +87,7 @@ export function WorkOrders(){
 // =============================================================== ITEM RATES (live)
 export function ItemRates(){
   const {data,setModal}=useApp();
-  return <><div className="heading-row"><div><p className="eyebrow">Owner controlled</p><h1>Item rates</h1><p className="intro">Sales quotes start at list. Below the floor, or past the discount limit, the owner approves.</p></div><button className="primary" onClick={()=>setModal("rate")}>+ Add item rate</button></div><article className="panel rate-table"><div className="table-head"><span>Item</span><span>Price each · floor</span><span>Minimum</span><span>Sales discount</span></div>{data.itemRates.filter(r=>r.kind!=="raw").map(r=><button key={r.id} onClick={()=>setModal("rate",r.id)}><b>{r.item}</b><strong>{usd2(r.rate)} <small>· floor {usd2(r.floor??0)} · cost {usd2(r.cost||0)}</small></strong><span>{num(r.minimum)} bottles</span><span>Up to {r.discountLimit}%</span></button>)}</article></>;
+  return <><div className="heading-row"><div><p className="eyebrow">Owner controlled</p><h1>Item rates</h1><p className="intro">Sales quotes start at list. Below the floor, or past the discount limit, the owner approves.</p></div><button className="primary" onClick={()=>setModal("rate")}>+ Add item rate</button></div><article className="panel rate-table"><div className="table-head"><span>Item</span><span>Price each · floor</span><span>Minimum</span><span>Sales discount</span></div>{data.itemRates.filter(r=>r.kind!=="raw").map(r=><button key={r.id} onClick={()=>setModal("rate",r.id)}><b>{r.item}</b><strong>{usd2(r.rate)} <small>· floor {usd2(r.floor??0)} · cost {usd2(r.cost||0)}</small></strong><span>{num(r.minimum)} bottles</span><span>Up to {r.discountLimit}%</span></button>)}</article><CatalogueEditor/></>;
 }
 
 // =============================================================== INVENTORY (live)
@@ -225,6 +225,83 @@ export function SettingsWorkspace(){
  * Silicone Cap" are one word apart on a screen and obvious side by side in a photograph. Photos are
  * keyed by the item name, so the same picture shows on the warehouse tablet, the build sheet and here.
  */
+/**
+ * What the machines mould, and what those blanks become.
+ *
+ * These arrived with the production model and were filled in from the app's own defaults, so the
+ * calendar has been scheduling against products the owner could not see anywhere — "Screw-top 5-gal"
+ * and "5 Gal + 2 Screw Caps" existed only in code. Anything the plan is allowed to reference has to be
+ * something somebody can look at and change.
+ *
+ * Edits are held locally and saved in one go: these feed pricing and planning, and a commit per
+ * keystroke would put a hundred versions of a half-typed name through the audit log.
+ */
+export function CatalogueEditor(){
+  const {data,commit,notify}=useApp();
+  const [blanks,setBlanks]=useState<Blank[]>(data.blanks?.length?data.blanks:DEFAULT_BLANKS);
+  const [skus,setSkus]=useState<Sku[]>(data.skus?.length?data.skus:DEFAULT_SKUS);
+  const [open,setOpen]=useState(false);
+  const dirty=JSON.stringify({blanks,skus})!==JSON.stringify({blanks:data.blanks,skus:data.skus});
+  // How much of the plan points at each of these, so nothing in use disappears by accident.
+  const uses=(id:string)=>(data.prodDays||[]).flatMap(d=>d.steps||[]).filter(x=>x.target===id).length;
+  const save=()=>{
+    commit(v=>({...v,blanks,skus}),"catalogue.update","Moulds and products updated");
+    notify("Products and moulds saved","Item rates");
+  };
+  const setBlank=(i:number,patch:Partial<Blank>)=>setBlanks(b=>b.map((x,k)=>k===i?{...x,...patch}:x));
+  const setSku=(i:number,patch:Partial<Sku>)=>setSkus(s=>s.map((x,k)=>k===i?{...x,...patch}:x));
+  const drop=(kind:"blank"|"sku",i:number)=>{
+    const id=kind==="blank"?blanks[i].id:skus[i].id;
+    if(uses(id)){notify(`${id} is on the production plan ${uses(id)} time${uses(id)===1?"":"s"} — take it off the calendar first`,"Item rates",true);return}
+    if(kind==="blank")setBlanks(b=>b.filter((_,k)=>k!==i));else setSkus(s=>s.filter((_,k)=>k!==i));
+  };
+
+  return <section className="panel catalogue">
+    <div className="panel-title">
+      <div><h2>Moulds &amp; products</h2><p>What the machines actually make, and what the production plan schedules against. Prices live in the table above; this is the shape of the thing.</p></div>
+      <button onClick={()=>setOpen(o=>!o)}>{open?"Hide":"Show"}</button>
+    </div>
+    {open&&<>
+      <h3 className="catalogue-head">Blanks — what comes off a machine</h3>
+      <div className="catalogue-grid head"><span>Name</span><span>Size</span><span>Neck</span><span>Sold plain</span><span>On the plan</span><span/></div>
+      {blanks.map((b,i)=><div className="catalogue-grid" key={b.id}>
+        <input value={b.name} onChange={e=>setBlank(i,{name:e.target.value})}/>
+        <select value={b.size} onChange={e=>setBlank(i,{size:e.target.value as Blank["size"]})}><option value="3-gal">3-gal</option><option value="5-gal">5-gal</option></select>
+        <select value={b.neck} onChange={e=>setBlank(i,{neck:e.target.value as Blank["neck"]})}><option value="screw">Screw</option><option value="regular">Regular</option></select>
+        <select value={b.sellable?"yes":"no"} onChange={e=>setBlank(i,{sellable:e.target.value==="yes"})}><option value="no">No</option><option value="yes">Yes</option></select>
+        <em>{uses(b.id)||"—"}</em>
+        <button className="link-button" onClick={()=>drop("blank",i)}>Remove</button>
+      </div>)}
+      <button className="secondary" onClick={()=>setBlanks(b=>[...b,{id:uid("b"),name:"New blank",size:"5-gal",neck:"regular"}])}>+ Add a blank</button>
+
+      <h3 className="catalogue-head">Products — what a blank becomes</h3>
+      <div className="catalogue-grid sku head"><span>Code</span><span>Name</span><span>Sold on</span><span>Moulded from</span><span>Caps</span><span>On the plan</span><span/></div>
+      {skus.map((x,i)=><div className="catalogue-grid sku" key={x.id}>
+        <b>{x.id}</b>
+        <input value={x.name} onChange={e=>setSku(i,{name:e.target.value})}/>
+        <select value={x.channel} onChange={e=>setSku(i,{channel:e.target.value as Sku["channel"]})}>
+          <option value="amazon">Amazon</option><option value="wholesale">Wholesale</option><option value="both">Both</option></select>
+        <select value={x.blankId} onChange={e=>setSku(i,{blankId:e.target.value})}>{blanks.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select>
+        <span className="catalogue-caps">
+          <input type="number" min="0" value={x.caps[0]?.qty??0}
+            onChange={e=>{const q=Math.max(0,Number(e.target.value)||0);setSku(i,{caps:q?[{component:x.caps[0]?.component||"Screw cap",qty:q}]:[]})}}/>
+          <select value={x.caps[0]?.component||"Screw cap"} disabled={!x.caps.length}
+            onChange={e=>setSku(i,{caps:[{component:e.target.value,qty:x.caps[0]?.qty||1}]})}>{CAP_KINDS.map(c=><option key={c}>{c}</option>)}</select>
+        </span>
+        <em>{uses(x.id)||"—"}</em>
+        <button className="link-button" onClick={()=>drop("sku",i)}>Remove</button>
+      </div>)}
+      <button className="secondary" onClick={()=>setSkus(s=>[...s,{id:`NEW-${s.length+1}`,name:"New product",channel:"amazon",blankId:blanks[0]?.id||"",caps:[]}])}>+ Add a product</button>
+
+      <div className="button-row" style={{marginTop:14}}>
+        {dirty&&<button className="cancel" onClick={()=>{setBlanks(data.blanks||DEFAULT_BLANKS);setSkus(data.skus||DEFAULT_SKUS)}}>Discard changes</button>}
+        <button className="primary" disabled={!dirty} onClick={save}>{dirty?"Save moulds & products":"Saved"}</button>
+      </div>
+      <p className="link-warning">A code cannot be changed once the plan references it — the calendar would lose track of what it is making. Add a new product instead.</p>
+    </>}
+  </section>;
+}
+
 export function ProductPhotos(){
   const {data,notify,role}=useApp();
   const [urls,setUrls]=useState<Record<string,string>>({});

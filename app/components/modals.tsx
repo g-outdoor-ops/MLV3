@@ -151,10 +151,17 @@ export function RateModal({close,editId}:{close:()=>void;editId?:string}){
   const submit=(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget);const item=String(f.get("item"));    // The blank is what lets a customer order reach a machine. "" is a real answer — not moulded here —
     // and stops the one-time guess in normalize from filling it back in.
     const blankId=String(f.get("blank")||"");const capQty=Number(f.get("capQty"))||0;const capKind=String(f.get("capKind")||"Screw cap");
+    const packedAs=String(f.get("packedAs")||"boxed") as "loose"|"boxed"|"palletized";
+    const casesPerPallet=packedAs==="palletized"?Math.max(0,Number(f.get("casesPerPallet"))||0):undefined;
     const rec={id:r?.id||uid("i"),item,sub:String(f.get("sub")||""),rate:Number(f.get("rate")),floor:Number(f.get("floor")),minimum:Number(f.get("minimum")),discountLimit:Number(f.get("limit")),unitsPerCase:Number(f.get("upc"))||2,kind:"finished" as const,cost:Number(f.get("cost"))||0,material:String(f.get("material")||""),qcChecks:r?.qcChecks||DEFAULT_QC,
-      blankId,caps:blankId&&capQty>0?[{component:capKind,qty:capQty}]:[]};
+      blankId,caps:blankId&&capQty>0?[{component:capKind,qty:capQty}]:[],
+      packedAs,boxSize:String(f.get("boxSize")||"")||undefined,label:String(f.get("label")||"")||undefined,
+      ...(casesPerPallet?{casesPerPallet}:{casesPerPallet:undefined}),
+      palletPattern:String(f.get("palletPattern")||"")||undefined};
     commit(v=>({...v,itemRates:r?v.itemRates.map(x=>x.id===r.id?{...x,...rec}:x):[...v.itemRates,rec],inventory:r||v.inventory.some(i=>i.item===item)?v.inventory:[...v.inventory,{id:uid("s"),item,kind:"finished" as const,onHand:0,committed:0,reorder:100,cost:rec.cost,unit:"bottles"}]}),r?"rate.update":"rate.create",`${item} rate saved`);notify(`Item rate saved — ${item}`,"Item rates");close()};
   const raws=data.inventory.filter(i=>i.kind==="raw");const blanks=data.blanks?.length?data.blanks:DEFAULT_BLANKS;
+  // Shown or hidden as the answer changes: a loose product has no pallet pattern to ask about.
+  const [packedAs,setPackedAs]=useState<"loose"|"boxed"|"palletized">(r?.packedAs||(r?.casesPerPallet?"palletized":"boxed"));
   return <Shell title={r?`Edit ${r.item}`:"Set item rate"} eyebrow="Owner controlled pricing" onSubmit={submit} close={close} submitLabel="Save"><div className="form-grid">
     <label>Item<input name="item" defaultValue={r?.item||""} required placeholder="e.g. 5-Gallon Bottle · 2 caps"/></label><label>Description<input name="sub" defaultValue={r?.sub||""}/></label>
     <label>List price (each)<input name="rate" type="number" step="0.05" defaultValue={r?.rate??9.9}/></label><label>Floor price (each)<input name="floor" type="number" step="0.05" defaultValue={r?.floor??8.75}/></label>
@@ -164,7 +171,16 @@ export function RateModal({close,editId}:{close:()=>void;editId?:string}){
     <label>Moulded from<select name="blank" defaultValue={r?.blankId??""}><option value="">Not moulded here</option>{blanks.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
     <label>Caps per bottle<input name="capQty" type="number" min="0" defaultValue={r?.caps?.[0]?.qty??0}/></label>
     <label>Cap type<select name="capKind" defaultValue={r?.caps?.[0]?.component||"Screw cap"}>{CAP_KINDS.map(c=><option key={c}>{c}</option>)}</select></label>
-  </div><p className="hint">Moulded from is what production plans against — an order for an item with no blank cannot be scheduled.</p></Shell>;
+    <label>How it ships<select name="packedAs" value={packedAs} onChange={e=>setPackedAs(e.target.value as typeof packedAs)}>
+      <option value="loose">Loose — no boxes</option>
+      <option value="boxed">Boxed</option>
+      <option value="palletized">Boxed on pallets</option>
+    </select></label>
+    <label>Box size<input name="boxSize" defaultValue={r?.boxSize||""} placeholder="e.g. 18×18×10"/></label>
+    {packedAs==="palletized"&&<label>Boxes per pallet<input name="casesPerPallet" type="number" min="0" defaultValue={r?.casesPerPallet??0}/></label>}
+    {packedAs==="palletized"&&<label>Pallet pattern<input name="palletPattern" defaultValue={r?.palletPattern||""} placeholder="e.g. 6 per layer, 8 high, wrapped"/></label>}
+    <label>Label<input name="label" defaultValue={r?.label||""} placeholder="the label stock this uses"/></label>
+  </div><p className="hint">Moulded from is what production plans against — an order for an item with no blank cannot be scheduled. How it ships decides what the packing bench is asked to count.</p></Shell>;
 }
 
 // =============================== PURCHASE ORDER

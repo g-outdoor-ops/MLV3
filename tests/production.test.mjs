@@ -485,6 +485,34 @@ t("moulding is chosen from blanks, the rest from products",/step\.type==="mold"\
 t("and a blank says which product it becomes",/for \$\{makes\.join/.test(ui));
 }
 
+// The plan schedules against blanks and SKUs. Those arrived with the model and were filled in from the
+// app's own defaults, so for a while the calendar referenced products the owner could not see anywhere.
+if(app){
+const owner=readFileSync(new URL("../app/components/owner.tsx",import.meta.url),"utf8");
+const modal=readFileSync(new URL("../app/components/modals.tsx",import.meta.url),"utf8");
+const authz=readFileSync(new URL("../app/server/authz.ts",import.meta.url),"utf8");
+console.log("\nEverything the plan references can be seen and changed:");
+t("there is an editor for blanks and products",/function CatalogueEditor/.test(owner));
+t("it is on the item rates screen",/<CatalogueEditor\/>/.test(owner));
+t("it saves in one go rather than on every keystroke",/dirty/.test(owner)&&/catalogue\.update/.test(owner));
+// Removing something the calendar points at would leave steps making a thing that no longer exists.
+t("it will not remove one the plan is using",/is on the production plan/.test(owner));
+t("and the code cannot be edited once it is referenced",/A code cannot be changed once the plan references it/.test(owner));
+// They are catalogue, like prices: a floor tablet must not be able to rewrite them.
+t("blanks and products are owner-only on the server",/"blanks", "skus"/.test(authz));
+
+console.log("\nAn item says how it ships:");
+const {packingPlan,normalize:norm2,demoData:demo2}=app;
+const d2=norm2(demo2);
+const wo=d2.workOrders.find(w=>w.item==="5-Gallon Bottle · no cap");
+t("the item rate form asks",/How it ships/.test(modal)&&/packedAs/.test(modal));
+t("boxes per pallet is only asked for when it is palletized",/packedAs==="palletized"&&<label>Boxes per pallet/.test(modal));
+const rates=d2.itemRates.map(r=>r.item==="5-Gallon Bottle · no cap"?{...r,packedAs:"boxed",casesPerPallet:48}:r);
+t("a boxed product is not asked for a pallet count",packingPlan(wo,rates).pallets===0);
+t("a palletized one is",packingPlan(wo,d2.itemRates.map(r=>r.item==="5-Gallon Bottle · no cap"?{...r,packedAs:"palletized"}:r)).pallets>0);
+t("and the plan says which it is",["loose","boxed","palletized"].includes(packingPlan(wo,rates).packedAs));
+}
+
 // One calendar, not two. The month grid and the day list were separate screens drawing overlapping
 // work; a second one creeping back is the regression worth catching in the source.
 console.log("\nThere is one production calendar:");
