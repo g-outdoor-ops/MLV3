@@ -64,7 +64,10 @@ t("no settings beyond the lines and the machines",!seen.includes("discountApprov
 console.log("\nWhat it does show, because the floor cannot work without it:");
 t("the schedule",view.days.length>0);
 t("the open runs",view.workOrders.length>0);
-t("no finished runs clutter it",view.workOrders.every(w=>w.status!=="Done"));
+// Not by the office's word for it: "Done" there means quality passed, and a job that passed quality is
+// still at the packing bench. What the floor should not see is a job that is finished end to end.
+t("no finished jobs clutter it",view.workOrders.every(w=>w.stage<5));
+t("but one waiting at the bench is shown",view.workOrders.some(w=>w.stage===3));
 t("the customer name on an order it has to make",view.orders.some(o=>o.customer));
 t("the note sales left for the warehouse",view.orders.some(o=>o.notes));
 t("but nothing about what that order is worth",!JSON.stringify(view.orders).includes("payment")&&!JSON.stringify(view.orders).includes("deposit"));
@@ -127,7 +130,7 @@ t("a step with no run is still recordable from the tablet",!applyFloorAction(dat
 // The job traveller: what the floor screen runs on.
 console.log("\nA job carries where it is, not just what was planned:");
 const {JOB_NOT_STARTED,JOB_PRODUCTION,JOB_QC,JOB_COMPLETE,jobStageOf,setJobStage,pauseJob,blockJob,blockedFor,
-  jobReadiness,jobForecast,jobPriority,runConsumption:rc}=app;
+  jobReadiness,jobForecast,jobPriority}=app;
 const running=data.workOrders.find(w=>w.id==="WO-121");
 t("a job knows which stage it is at",jobStageOf(running)===JOB_PRODUCTION);
 // Records written before the traveller existed still read correctly.
@@ -202,6 +205,46 @@ t("and says who reported it",rep.data.workOrders.find(w=>w.id===job.id).hold.by=
 t("a problem needs a reason from the list",!!applyFloorAction(data,{op:"job.block",woId:job.id,reason:"whatever",by:"James"}).error);
 t("and 'Other' needs saying what it is",!!applyFloorAction(data,{op:"job.block",woId:job.id,reason:"Other",by:"James"}).error);
 t("reporting a problem touches nothing outside production",untouched(data,rep.data));
+
+console.log("\nPacking is its own job, counted in cartons and pallets:");
+const {packingPlan,recordPacking,newBatchId,JOB_PACKAGING}=app;
+const atBench=data.workOrders.find(w=>jobStageOf(w)===JOB_PACKAGING);
+const plan=packingPlan(atBench,data.itemRates);
+t("there is a job at the bench",!!atBench,`${atBench?.id}`);
+// 496 bottles, 2 to a carton, 48 cartons to a pallet.
+t("cartons come from what was actually made",plan.cartons===Math.ceil(atBench.good/plan.perCase),`${plan.cartons}`);
+t("pallets come from the cartons",plan.pallets===Math.ceil(plan.cartons/plan.casesPerPallet),`${plan.pallets}`);
+t("it says what will be used up",plan.uses.some(u=>/carton/i.test(u.item))&&plan.uses.some(u=>/label/i.test(u.item)));
+// An assembly run already fitted its caps as it recorded units; charging for them again empties the
+// shelf twice for one bottle.
+t("an assembly run's caps are not charged again at packing",
+  !packingPlan({...atBench,kind:"assembly"},data.itemRates).uses.some(u=>/cap/i.test(u.item)));
+t("a moulding run's caps are",packingPlan({...atBench,kind:"mould",item:"5-Gallon Bottle · 2 caps"},data.itemRates).uses.some(u=>/cap/i.test(u.item)));
+
+const packed=recordPacking(atBench,{received:496,cartons:246,pallets:6,by:"Marta"});
+t("what the packer counted is what is stored",packed.packing.cartons===246&&packed.packing.pallets===6);
+// The plan said 248 cartons. The packer said 246. The record keeps 246.
+t("a short pallet is kept, not rounded up to the plan",packed.packing.cartons!==plan.cartons);
+t("packing records its own owner",packed.packing.operator==="Marta");
+t("and a batch id is generated when none is given",/^B\d{6}-\d+$/.test(packed.packing.batchId),`${packed.packing.batchId}`);
+t("a given batch id is kept",recordPacking(atBench,{received:1,cartons:1,pallets:1,batchId:"PAL-9",by:"M"}).packing.batchId==="PAL-9");
+t("the batch id is stable for a job and a day",newBatchId(atBench,new Date("2026-09-08"))===newBatchId(atBench,new Date("2026-09-08")));
+
+console.log("\nThe bench cannot invent stock:");
+t("packing is refused before the job gets there",!!applyFloorAction(data,{op:"job.pack",woId:"WO-121",received:10,cartons:5,pallets:1,by:"M"}).error);
+const ok=applyFloorAction(data,{op:"job.pack",woId:atBench.id,received:496,cartons:246,pallets:6,by:"Marta"});
+t("and allowed once it is at the bench",!ok.error,`${ok.error}`);
+// More bottles than the run made would be somebody else's stock leaving under this job.
+t("more bottles than were made is refused",!!applyFloorAction(data,{op:"job.pack",woId:atBench.id,received:99999,cartons:1,pallets:1,by:"M"}).error);
+t("nothing at all is refused",!!applyFloorAction(data,{op:"job.pack",woId:atBench.id,received:0,cartons:0,pallets:0,by:"M"}).error);
+const cartonsBefore=data.inventory.find(i=>/carton/i.test(i.item)).onHand;
+// What the packer counted, not what the plan said — 246 cartons, not the 248 the run should have made.
+t("the cartons actually used come off the shelf",
+  ok.data.inventory.find(i=>/carton/i.test(i.item)).onHand===cartonsBefore-246,
+  `${ok.data.inventory.find(i=>/carton/i.test(i.item)).onHand} from ${cartonsBefore}`);
+t("packing touches nothing outside production and stock",untouched(data,ok.data));
+t("the tablet is given the plan and the record together",
+  floorView(ok.data).workOrders.find(w=>w.id===atBench.id).packing.record.cartons===246);
 
 console.log("\nThe audit says the record came from the link, not from a person who signed in:");
 t("an unnamed tablet is still identified",floorActor()==="Warehouse link");

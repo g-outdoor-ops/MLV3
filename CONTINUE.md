@@ -17,8 +17,8 @@ to invoicing or payments as touching real money.
 
 ## The state of play
 
-`main` is deployed and pushed through **`733c4f1`** — Phases 1-8. Phase 9 is in the tree, uncommitted:
-the Warehouse Floor screen and the job traveller behind it.
+`main` is deployed and pushed through **`cc4205e`** — Phases 1-9. Phase 10 is in the tree, uncommitted:
+the packing bench.
 
 The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
 The production rebuild is `4b2ed00` (Phase 1, model), `8c0bf42` (Phase 2, the calendar) and Phase 3 in
@@ -360,7 +360,7 @@ Answers to what the owner asked, and the two changes he chose.
   or payment in full lands. That is "created, not finalised until it is paid" in the model that already
   existed.
 
-### Phase 9 — the Warehouse Floor screen (in the tree, uncommitted)
+### Phase 9 — the Warehouse Floor screen (`cc4205e`)
 
 The warehouse link worked but it was a production schedule: a list of what was planned, with the same
 button under everything. It is a floor-control screen now, built to the owner's render — one job pinned
@@ -395,10 +395,33 @@ numbers and amounts, and a test asserts none of that reaches the tablet.
 the server. A stage moves forward one step at a time: skipping quality is how untested bottles reach a
 customer, so it is refused, and so is a block with no reason.
 
+### Phase 10 — the packing bench (in the tree, uncommitted)
+
+Packing was one button. It is its own job now, with its own owner: the person who boxes a run is often
+not the person who moulded it, and "who made this" and "who packed this" are different questions.
+
+- **`packingPlan()`** works out from the build sheet what the run should turn into — bottles to pack,
+  bottles per carton, cartons expected, cases per pallet, pallets expected — and shows it *beside* the
+  entry rather than filling it in. A pallet that came out a carton short is a real thing that should be
+  visible, not rounded away by a number the app assumed.
+- **`recordPacking()`** stores what the packer counted: bottles received, cartons finished, pallets
+  finished, a note, and a batch id (generated as `B<yymmdd>-<job>` when none is given). The screen says
+  plainly when the count is under the plan.
+- **`packingUses()`** takes off the shelf what was *actually used* — 246 cartons, not the 248 the plan
+  called for. Caps are charged here only when no assembly run already fitted them, or one bottle empties
+  the shelf twice.
+- **A pallet label** that prints: company, product, batch, job, bottles, cartons, pallets, per carton,
+  and the note. A `@media print` block hides everything else on the page, so the tablet prints the label
+  and not the screen around it.
+- **`job.pack`** on the endpoint, refused before the job reaches the bench and refused for more bottles
+  than the run made — that would be somebody else's stock leaving under this job.
+
+Two defects the render caught: the due date showed **Invalid Date** for orders still holding a legacy
+label rather than an ISO date (the floor view normalises it now, and the screen shows an unreadable date
+as it was stored), and the batch id and note had picked up the big centred styling meant for quantities.
+
 ### Still open on the floor screen
 
-- **Packaging has no detail of its own.** The spec asks for cartons and pallets counted, a pallet or
-  batch id, packaging material consumed, and printed pallet labels. Packing is one button today.
 - **No photos.** The build sheet has a drawn bottle, not a picture of the finished item, and a problem
   cannot carry a photo — there is nowhere to store one.
 - **Quality is still signed off in the office**, because passing it is what puts bottles into stock. The
@@ -485,7 +508,7 @@ on Render before the tablet is handed over.
 
 - **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
   `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
-  Run with `node tests/<name>.test.mjs`. 369 assertions.
+  Run with `node tests/<name>.test.mjs`. 389 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.

@@ -197,3 +197,37 @@
   .wf-count-main strong{font-size:34px}
 }
 .wf-since{color:var(--dim);font-size:13px;font-weight:700;white-space:nowrap}
+
+/* Packing: the plan beside the entry, so a short pallet is visible rather than assumed. */
+.wf-expect{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:12px}
+.wf-expect > div{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+  font-size:20px;font-weight:800;font-variant-numeric:tabular-nums}
+.wf-expect i{display:block;color:var(--faint);font-size:11px;font-style:normal;font-weight:800;margin-bottom:3px}
+.wf-grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.wf-short{margin:0 0 12px;color:#e8c583;font-size:13px;font-weight:700}
+.wf-packed{margin:9px 0 0;font-size:13px;color:var(--dim)}
+.wf-packed b{color:var(--ink)}
+
+/* The pallet label. On screen it is a preview; on paper it is the only thing there. */
+.wf-label{margin-top:14px;background:#fff;color:#111;border-radius:10px;padding:18px 20px}
+.wf-label-head{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:#555}
+.wf-label-head b{font-size:16px;color:#111}
+.wf-label h4{margin:8px 0 14px;font-size:26px;letter-spacing:-.5px}
+.wf-label-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;border-top:2px solid #111;padding-top:12px}
+.wf-label-grid i{display:block;font-style:normal;font-size:11px;font-weight:800;color:#666;text-transform:uppercase;letter-spacing:.05em}
+.wf-label-grid b{font-size:22px;font-variant-numeric:tabular-nums}
+.wf-label p{margin:12px 0 0;font-size:13px;color:#333}
+.wf-label-code{margin-top:14px;padding:12px;border:2px solid #111;border-radius:6px;text-align:center;
+  font-family:"Courier New",monospace;font-size:22px;font-weight:700;letter-spacing:.18em}
+.wf-label .wf-btn{margin-top:14px;width:100%;background:#111;border-color:#111;color:#fff}
+
+@media print{
+  body{background:#fff}
+  .wf > *:not(.wf-body),.wf-side,.wf-next,.wf-alert,.wf-actions,.wf-expect,.wf-grid3,.wf-form-actions,
+  .wf-job-top,.wf-job-body,.wf-count,.wf-bar,.wf-stepper,.wf-two,.wf-hold,.wf-form h3,.wf-form label,
+  .wf-quiet,.wf-short,.wf-toast{display:none!important}
+  .wf,.wf-body,.wf-main,.wf-job,.wf-form{background:#fff!important;border:0!important;padding:0!important;margin:0!important}
+  .wf-label{margin:0;padding:0}
+  .wf-label .wf-btn{display:none!important}
+}
+.wf-form label.wf-text input{font-size:16px;font-weight:600;text-align:left}

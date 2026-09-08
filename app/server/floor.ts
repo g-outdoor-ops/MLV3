@@ -18,10 +18,10 @@
 //     leaked link cannot reprice the catalogue or delete a customer, because there is no way to ask.
 // The .ts extension is deliberate: it is what Node's own resolver wants, so this module can be loaded
 // straight from tests/warehouse-link.test.mjs and checked as it ships rather than as a copy of itself.
-import { ASSEMBLY_LINE, HOLD_REASONS, JOB_COMPLETE, JOB_NOT_STARTED, JOB_PRODUCTION, JOB_STAGES, blockJob, blockedFor, consume, jobForecast,
-  jobPaused, jobPriority, jobReadiness, jobRemaining, jobStageOf, newFloorToken, pauseJob, recordStep, resumeJob, setJobStage, runConsumption, stepProgress,
+import { ASSEMBLY_LINE, HOLD_REASONS, JOB_COMPLETE, JOB_NOT_STARTED, JOB_PACKAGING, JOB_PRODUCTION, JOB_STAGES, blockJob, blockedFor, consume, dueIso, jobForecast,
+  jobPaused, jobPriority, jobReadiness, jobRemaining, jobStageOf, newFloorToken, packingPlan, packingUses, pauseJob, recordPacking, recordStep, resumeJob, setJobStage, runConsumption, stepProgress,
   type AppData, type Blank, type JobHold, type JobPriority, type Machine, type MaterialCheck, type ProdDay, type ProdStep,
-  type Sku, type WorkOrder } from "../app-data.ts";
+  type PackingPlan, type PackingRecord, type Sku, type WorkOrder } from "../app-data.ts";
 
 /** Days either side of today the tablet is shown. Old work stays visible long enough to be recorded. */
 const WINDOW_BACK=10, WINDOW_FORWARD=28;
@@ -37,7 +37,8 @@ export type FloorWork={id:string;orderId?:string;kind?:string;item:string;quanti
   dueAt?:string;priority:JobPriority;
   ready:{ok:boolean;missing:string[];checks:MaterialCheck[]};
   build:FloorBuild;
-  rate?:{perHour:number;finishAt:string}};
+  rate?:{perHour:number;finishAt:string};
+  packing:PackingPlan&{record?:PackingRecord}};
 export type FloorEvent={title:string;detail:string;actor:string;at:string};
 export type FloorView={
   company:string;lines:string[];machines:Machine[];blanks:Blank[];skus:Sku[];
@@ -101,6 +102,7 @@ export function floorView(data:AppData):FloorView{
         palletPattern:rate?.palletPattern,instructions:rate?.instructions,photo:rate?.photo,
         qcChecks:rate?.qcChecks||[]},
       ...(forecast?{rate:{perHour:forecast.perHour,finishAt:forecast.finishAt}}:{}),
+      packing:{...packingPlan(w,data.itemRates),record:w.packing},
     };
   });
   // Only orders the floor is actually being asked to make or pack, and only the fields it needs to do
@@ -109,7 +111,7 @@ export function floorView(data:AppData):FloorView{
     ...days.flatMap(d=>d.steps.map(s=>s.linkedTo).filter(Boolean) as string[])]);
   const orders=(data.orders||[]).filter(o=>wanted.has(o.id)).map(o=>({
     id:o.id,customer:data.customers.find(c=>c.id===o.customerId)?.name||"",
-    item:o.item,quantity:o.quantity,due:o.due,notes:o.notes||""}));
+    item:o.item,quantity:o.quantity,due:dueIso(o.due)||o.due,notes:o.notes||""}));
   // The live feed is built from an allow-list of what the floor did, not from the activity log wholesale
   // — that log carries invoice numbers and amounts, and none of that belongs on a tablet in a warehouse.
   const FLOOR_EVENTS=["Production update","Production reported","Run finished","Run started","Order packed",
@@ -142,7 +144,8 @@ export type FloorAction=
   |{op:"job.stage";woId:string;stage:number;by?:string}
   |{op:"job.pause";woId:string;by?:string}
   |{op:"job.resume";woId:string;by?:string}
-  |{op:"job.block";woId:string;reason:string;note?:string;by?:string};
+  |{op:"job.block";woId:string;reason:string;note?:string;by?:string}
+  |{op:"job.pack";woId:string;received:number;cartons:number;pallets:number;batchId?:string;note?:string;by?:string};
 
 /** The name the tablet gives is a label, not a claim — nobody signed in. Kept short and printable. */
 export const floorActor=(by?:string)=>{
@@ -211,6 +214,27 @@ export function applyFloorAction(data:AppData,action:FloorAction,now=new Date().
     if(stage>at+1)return {error:`${wo.id} has to go through ${JOB_STAGES[at+1].toLowerCase()} first`};
     return {data:{...data,workOrders:data.workOrders.map(w=>w.id===wo.id?setJobStage(w,stage,by,now):w)},
       action:"floor.stage",summary:`${wo.id} · ${JOB_STAGES[stage].toLowerCase()} (${by})`};
+  }
+
+  if(action.op==="job.pack"){
+    const wo=(data.workOrders||[]).find(w=>w.id===action.woId);
+    if(!wo)return {error:"That job is no longer open"};
+    if(jobStageOf(wo)!==JOB_PACKAGING)return {error:`${wo.id} is not at packing yet`};
+    const received=num(action.received),cartons=num(action.cartons),pallets=num(action.pallets);
+    if(!received&&!cartons)return {error:"Nothing to record"};
+    // More bottles than the run made would be somebody else's stock going out under this job.
+    if(received>wo.good)return {error:`${wo.id} only made ${wo.good} — record what is actually there`};
+    const batchId=String(action.batchId||"").trim().slice(0,40)||undefined;
+    const uses=packingUses(wo,data.itemRates,{received,cartons});
+    const packed=recordPacking(wo,{received,cartons,pallets,batchId,note:String(action.note||"").trim().slice(0,300),by},now);
+    return {
+      data:{...data,
+        workOrders:data.workOrders.map(w=>w.id===wo.id?packed:w),
+        // Cartons, labels and — when no assembly run already fitted them — caps come off the shelf here.
+        inventory:uses.reduce((inv,u)=>consume(inv,[{item:u.item,perUnit:1}],u.qty),data.inventory)},
+      action:"floor.pack",
+      summary:`${wo.id} packed · ${received} bottles, ${cartons} cartons, ${pallets} pallets · batch ${packed.packing?.batchId} (${by})`,
+    };
   }
 
   if(action.op==="job.pause"||action.op==="job.resume"){

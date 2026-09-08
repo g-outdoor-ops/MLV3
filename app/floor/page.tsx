@@ -21,7 +21,10 @@ type Tab=typeof TABS[number];
 
 const num=(n:number)=>Math.round(n).toLocaleString("en-US");
 const clock=(iso?:string)=>iso?new Date(iso).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}):"";
-const day=(iso:string)=>new Date(iso+"T12:00:00Z").toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",timeZone:"UTC"});
+const day=(v:string)=>{
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(v||""))return v||"—";
+  return new Date(v+"T12:00:00Z").toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",timeZone:"UTC"});
+};
 const ago=(mins:number)=>mins<60?`${mins} min`:`${Math.floor(mins/60)}h ${mins%60}m`;
 
 export default function FloorLinkPage(){
@@ -266,6 +269,11 @@ function JobCard({job,view,busy,panel,setPanel,send,pinned,onClose}:{job:FloorWo
           {job.build.perCase?` • ${num(Math.ceil(job.quantity/job.build.perCase))} cases`:""}
           {job.build.casesPerPallet?` • ${job.build.casesPerPallet} cases per pallet`:""}
         </p>
+        {job.packing.record?.cartons!=null&&<p className="wf-packed">
+          Packed so far: <b>{num(job.packing.record.cartons)}</b> cartons · <b>{num(job.packing.record.pallets||0)}</b> pallets
+          {job.packing.record.batchId?<> · batch <b>{job.packing.record.batchId}</b></>:null}
+          {job.packing.record.operator?` · by ${job.packing.record.operator}`:""}
+        </p>}
         {order?.notes&&<p className="wf-note"><b>From sales:</b> {order.notes}</p>}
       </section>
     </div>
@@ -278,7 +286,10 @@ function JobCard({job,view,busy,panel,setPanel,send,pinned,onClose}:{job:FloorWo
       {!job.hold&&<button className="wf-btn danger" onClick={()=>setPanel(panel==="problem"?null:"problem")}>Report a problem</button>}
     </div>
 
-    {panel==="record"&&<Record job={job} busy={busy} onCancel={()=>setPanel(null)}
+    {panel==="record"&&stage===3&&<Packing job={job} company={view.company} busy={busy} onCancel={()=>setPanel(null)}
+      onSave={(e)=>send({op:"job.pack",woId:job.id,...e},`${job.id} · ${num(e.cartons)} cartons recorded`)}
+      onDone={()=>send({op:"job.stage",woId:job.id,stage:4},`${job.id} packed and ready to ship`)}/>}
+    {panel==="record"&&stage!==3&&<Record job={job} busy={busy} onCancel={()=>setPanel(null)}
       onSave={(good,scrap)=>send({op:"wo.progress",woId:job.id,good,scrap},`${job.id} · ${num(good)} recorded`)}
       onFinish={()=>send({op:"job.stage",woId:job.id,stage:2},`${job.id} sent to quality`)}/>}
     {panel==="instructions"&&<Instructions build={job.build} job={job} order={order}/>}
@@ -297,8 +308,7 @@ function Primary({job,busy,onRecord,send}:{job:FloorWork;busy:boolean;onRecord:(
   // Quality is signed off in the office, where passing it puts the bottles into stock. The floor is
   // told where the job is, not asked to sign it off.
   if(job.stage===2)return <button className="wf-btn primary" disabled>With the office for quality</button>;
-  if(job.stage===3)return <button className="wf-btn primary" disabled={busy}
-    onClick={()=>send({op:"job.stage",woId:job.id,stage:4},`${job.id} packed`)}>Packing done</button>;
+  if(job.stage===3)return <button className="wf-btn primary" disabled={busy} onClick={onRecord}>▶ Pack this run</button>;
   return <button className="wf-btn primary" disabled={busy}
     onClick={()=>send({op:"job.stage",woId:job.id,stage:5},`${job.id} handed to shipping`)}>Handed to shipping</button>;
 }
@@ -345,6 +355,84 @@ function Record({job,busy,onSave,onFinish,onCancel}:{job:FloorWork;busy:boolean;
     {/* The end of a run is the same moment as its last entry, so it is offered here rather than as a
         fifth button competing with the one thing to press. */}
     <button className="wf-btn" style={{width:"100%",marginTop:10}} disabled={busy} onClick={onFinish}>That is the lot — send to quality</button>
+  </div>;
+}
+
+/**
+ * The packing bench. What came off the machine is bottles; what leaves is cartons on pallets with a
+ * label on them, and both get counted here by whoever is doing the packing — which is often not the
+ * person who moulded it, so this records its own owner.
+ *
+ * The plan is shown beside the entry rather than filled in for them: a pallet that came out a carton
+ * short is a real thing that should be visible, not rounded away by a number the app assumed.
+ */
+function Packing({job,company,busy,onSave,onDone,onCancel}:{job:FloorWork;company:string;busy:boolean;onSave:(e:{received:number;cartons:number;pallets:number;batchId:string;note:string})=>void;onDone:()=>void;onCancel:()=>void}){
+  const plan=job.packing;
+  const rec=plan.record;
+  const [received,setReceived]=useState(String(rec?.received??job.good));
+  const [cartons,setCartons]=useState(String(rec?.cartons??plan.cartons));
+  const [pallets,setPallets]=useState(String(rec?.pallets??plan.pallets));
+  const [batchId,setBatchId]=useState(rec?.batchId||"");
+  const [note,setNote]=useState(rec?.note||"");
+  const [label,setLabel]=useState(false);
+  const n=(v:string)=>Math.max(0,Number(v)||0);
+  const shortCartons=plan.cartons-n(cartons);
+  return <div className="wf-form">
+    <h3>Pack this run · {job.id}</h3>
+
+    <div className="wf-expect">
+      <div><i>Bottles to pack</i>{num(job.good)}</div>
+      <div><i>Per carton</i>{plan.perCase||"—"}</div>
+      <div><i>Cartons expected</i>{num(plan.cartons)}</div>
+      <div><i>Cases per pallet</i>{plan.casesPerPallet||"—"}</div>
+      <div><i>Pallets expected</i>{plan.pallets?num(plan.pallets):"—"}</div>
+    </div>
+    <p className="wf-quiet">
+      {plan.caps.length?`${plan.caps.map(c=>`${c.qty} × ${c.component}`).join(" + ")} per bottle · `:""}
+      {plan.label?`${plan.label} · `:""}{plan.boxSize?`${plan.boxSize} cartons`:""}
+      {plan.palletPattern?` · ${plan.palletPattern}`:""}
+    </p>
+
+    <div className="wf-grid3">
+      <label>Bottles received<input inputMode="numeric" value={received} onChange={e=>setReceived(e.target.value)}/></label>
+      <label>Cartons finished<input inputMode="numeric" value={cartons} onChange={e=>setCartons(e.target.value)}/></label>
+      <label>Pallets finished<input inputMode="numeric" value={pallets} onChange={e=>setPallets(e.target.value)}/></label>
+    </div>
+    {shortCartons>0&&n(cartons)>0&&<p className="wf-short">{num(shortCartons)} cartons fewer than the {num(plan.cartons)} this run should make — recorded as entered.</p>}
+    <label className="wf-text">Batch / pallet ID<input value={batchId} onChange={e=>setBatchId(e.target.value)} placeholder="left blank, one is generated"/></label>
+    <label className="wf-text">Note<input value={note} onChange={e=>setNote(e.target.value)} placeholder="anything odd about this pallet"/></label>
+
+    <div className="wf-form-actions">
+      <button className="wf-btn" onClick={onCancel}>Cancel</button>
+      <button className="wf-btn primary" disabled={busy}
+        onClick={()=>onSave({received:n(received),cartons:n(cartons),pallets:n(pallets),batchId,note})}>{busy?"Saving…":"Save packing"}</button>
+    </div>
+    <div className="wf-form-actions" style={{marginTop:10}}>
+      <button className="wf-btn" onClick={()=>setLabel(v=>!v)} disabled={!rec?.batchId}>
+        {rec?.batchId?(label?"Hide label":"Print pallet label"):"Save first, then print"}</button>
+      <button className="wf-btn" disabled={busy||!rec} onClick={onDone}>Packing done — ready to ship</button>
+    </div>
+
+    {label&&rec?.batchId&&<PalletLabel job={job} company={company} rec={rec} plan={plan}/>}
+  </div>;
+}
+
+/** A pallet label, sized for a sheet of A4 or letter and hidden from everything else when printing. */
+function PalletLabel({job,company,rec,plan}:{job:FloorWork;company:string;rec:NonNullable<FloorWork["packing"]["record"]>;plan:FloorWork["packing"]}){
+  return <div className="wf-label" id="wf-label">
+    <div className="wf-label-head"><b>{company||"MakeLogic"}</b><span>{new Date().toLocaleDateString("en-US")}</span></div>
+    <h4>{job.item}</h4>
+    <div className="wf-label-grid">
+      <div><i>Batch</i><b>{rec.batchId}</b></div>
+      <div><i>Job</i><b>{job.id}</b></div>
+      <div><i>Bottles</i><b>{num(rec.received||0)}</b></div>
+      <div><i>Cartons</i><b>{num(rec.cartons||0)}</b></div>
+      <div><i>Pallets</i><b>{num(rec.pallets||0)}</b></div>
+      <div><i>Per carton</i><b>{plan.perCase||"—"}</b></div>
+    </div>
+    {rec.note&&<p>{rec.note}</p>}
+    <div className="wf-label-code">{rec.batchId}</div>
+    <button className="wf-btn primary" onClick={()=>window.print()}>Print</button>
   </div>;
 }
 

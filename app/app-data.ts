@@ -31,7 +31,10 @@ export type WorkOrder={id:string;orderId?:string;kind?:"mould"|"assembly";item:s
   // floor works in: which stage of the journey the job is at, who is on it, when each stage was
   // reached, and what is stopping it. Both are written together so neither view is ever out of date.
   jobStage?:number;paused?:boolean;hold?:JobHold;rework?:boolean;
-  operator?:string;startedAt?:string;dueAt?:string;priority?:JobPriority;history?:JobStamp[]};
+  operator?:string;startedAt?:string;dueAt?:string;priority?:JobPriority;history?:JobStamp[];
+  // Packing is its own job with its own owner: the person who boxes a run is often not the person who
+  // moulded it, and "who made this" and "who packed this" are different answers to different questions.
+  packing?:PackingRecord};
 // ---- the job traveller -------------------------------------------------------------
 // A schedule card says what is planned. A traveller says where the thing actually is: molded, checked,
 // packed, on the dock. The floor needs the second one — "what do I do next" is not answerable from a
@@ -96,6 +99,79 @@ export function jobForecast(w:WorkOrder,now=Date.now()){
   if(perHour<=0)return null;
   const left=jobRemaining(w);
   return {perHour,minutesLeft:Math.round(left/perHour*60),finishAt:new Date(now+left/perHour*3600000).toISOString()};
+}
+
+// ---- packing ------------------------------------------------------------------------
+// What comes off the machine is bottles. What leaves is cartons on pallets with a label on them, and
+// somebody has to count both. The plan below is worked out from the build sheet; the record is what the
+// person at the bench actually did, and the two are kept apart so a short pallet is visible rather than
+// assumed away.
+export type PackingRecord={
+  operator?:string;received?:number;cartons?:number;pallets?:number;
+  batchId?:string;note?:string;startedAt?:string;doneAt?:string};
+
+export type PackingPlan={
+  received:number;perCase:number;cartons:number;casesPerPallet:number;pallets:number;
+  caps:AssemblyCap[];label?:string;boxItem?:string;boxSize?:string;palletPattern?:string;
+  uses:{item:string;qty:number}[]};
+
+/**
+ * What this run should turn into, from the build sheet: how many bottles are there to pack, how many go
+ * in a carton, how many cartons on a pallet, and what gets used up doing it.
+ *
+ * Caps are only counted here when no assembly run has already fitted them — an assembly run consumes its
+ * caps as it records good units, and charging for them twice would empty the shelf for one bottle.
+ */
+export function packingPlan(w:WorkOrder,itemRates:ItemRate[]):PackingPlan{
+  const rate=itemRates.find(r=>r.item===w.item);
+  const received=w.packing?.received??w.good;
+  const perCase=rate?.unitsPerCase||1;
+  const cartons=Math.ceil(received/perCase);
+  const casesPerPallet=rate?.casesPerPallet||0;
+  const pallets=casesPerPallet?Math.ceil(cartons/casesPerPallet):0;
+  const uses:{item:string;qty:number}[]=[];
+  if(rate?.boxItem&&cartons)uses.push({item:rate.boxItem,qty:cartons});
+  if(rate?.label&&received)uses.push({item:rate.label,qty:received});
+  if(w.kind!=="assembly")for(const c of rate?.caps||[])uses.push({item:c.component,qty:c.qty*received});
+  return {received,perCase,cartons,casesPerPallet,pallets,caps:rate?.caps||[],
+    label:rate?.label,boxItem:rate?.boxItem,boxSize:rate?.boxSize,palletPattern:rate?.palletPattern,uses};
+}
+
+/** A batch the pallet label can carry and the office can look up later. */
+export const newBatchId=(w:WorkOrder,when=new Date())=>
+  `B${when.toISOString().slice(2,10).replace(/-/g,"")}-${w.id.replace(/\D/g,"")||w.id}`;
+
+/**
+ * What packing actually used, from what the packer counted rather than from the plan. If the run should
+ * have made 248 cartons and 246 came out, 246 cartons come off the shelf — taking the planned figure
+ * would quietly consume stock nobody touched.
+ */
+export function packingUses(w:WorkOrder,itemRates:ItemRate[],entry:{received:number;cartons:number}){
+  const rate=itemRates.find(r=>r.item===w.item);
+  const uses:{item:string;qty:number}[]=[];
+  if(rate?.boxItem&&entry.cartons>0)uses.push({item:rate.boxItem,qty:entry.cartons});
+  if(rate?.label&&entry.received>0)uses.push({item:rate.label,qty:entry.received});
+  // An assembly run consumed its caps as it recorded units; charging for them again would empty the
+  // shelf twice for one bottle.
+  if(w.kind!=="assembly")for(const c of rate?.caps||[])if(entry.received>0)uses.push({item:c.component,qty:c.qty*entry.received});
+  return uses;
+}
+
+/**
+ * Record a packing run. The counts are the packer's, not the plan's — if the pallet came out one carton
+ * short that is the number that goes down, and the difference is visible instead of rounded away.
+ */
+export function recordPacking(w:WorkOrder,entry:{received:number;cartons:number;pallets:number;batchId?:string;note?:string;by:string},
+  now=new Date().toISOString()):WorkOrder{
+  const received=Math.max(0,Math.floor(entry.received));
+  return {...w,
+    packed:received,
+    packing:{...w.packing,operator:entry.by,received,
+      cartons:Math.max(0,Math.floor(entry.cartons)),pallets:Math.max(0,Math.floor(entry.pallets)),
+      batchId:entry.batchId||w.packing?.batchId||newBatchId(w,new Date(now)),
+      note:entry.note||w.packing?.note,
+      startedAt:w.packing?.startedAt||now,doneAt:now},
+    history:[...(w.history||[]),{stage:JOB_PACKAGING,at:now,by:entry.by}]};
 }
 
 export type MaterialCheck={item:string;need:number;have:number;ok:boolean;tracked:boolean};
@@ -371,6 +447,10 @@ export const demoData:AppData={
   {id:"WO-119",item:"3-Gallon Bottle · 2 caps",quantity:500,good:0,scrap:0,packed:0,date:iso(2),status:"Paused",purpose:"Build stock",line:"Line 2",days:2,
    jobStage:JOB_NOT_STARTED,paused:true,hold:{reason:"Packaging unavailable",note:"Shrink wrap ran out — none until the Thursday delivery",by:"James",at:new Date(Date.now()-52*60000).toISOString()}},
   {id:"WO-120",item:"5-Gallon Bottle · no cap",quantity:400,good:0,scrap:0,packed:0,date:iso(3),status:"Scheduled",purpose:"Build stock",line:"Line 1",days:1},
+  // Through the machine and past quality, waiting at the packing bench.
+  {id:"WO-117",orderId:"SO-1187",item:"5-Gallon Bottle · no cap",quantity:500,good:496,scrap:11,packed:0,date:iso(0),status:"Done",
+   jobStage:JOB_PACKAGING,operator:"James",startedAt:new Date(Date.now()-320*60000).toISOString(),
+   purpose:"Palm Aqua Delivery order",line:"Assembly",days:1,qcResult:"pass"},
   // Raised from the September plan: it carries the 7th and 8th of the screw-top 5-gal run, and it is
   // the only record of what those two days made.
   {id:"WO-121",item:"5-Gallon Bottle · 2 caps",quantity:1000,good:620,scrap:14,packed:0,date:"2026-09-07",status:"Running",jobStage:JOB_PRODUCTION,operator:"James",startedAt:new Date(Date.now()-208*60000).toISOString(),
