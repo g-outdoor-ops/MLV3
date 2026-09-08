@@ -233,22 +233,28 @@ export function ProductPhotos(){
   const items=data.inventory.filter(i=>i.kind!=="raw").map(i=>i.item);
   useEffect(()=>{listPhotoItems().then(setUrls).catch(()=>{})},[]);
   if(role!=="owner")return null;
+  // Read the list back from the store after every change. Trusting the local copy is how a photo can
+  // look saved on this screen and be missing everywhere else.
+  const refresh=()=>listPhotoItems().then(setUrls).catch(()=>{});
   const pick=async(item:string,file?:File)=>{
     if(!file)return;
     setBusy(item);setErr("");
     try{
-      const url=await savePhoto(item,file);
-      setUrls(u=>({...u,[item]:url}));
+      await savePhoto(item,file);
+      await refresh();
       notify(`Photo saved for ${item} — the floor sees it now`,"Inventory");
-    }catch(e){setErr(e instanceof Error?e.message:"That photo could not be saved")}
+    }catch(e){setErr(`${item}: ${e instanceof Error?e.message:"that photo could not be saved"}`)}
     setBusy("");
   };
   const clear=async(item:string)=>{
     setBusy(item);setErr("");
-    try{await removePhoto(item);setUrls(u=>{const n={...u};delete n[item];return n})}
-    catch(e){setErr(e instanceof Error?e.message:"That photo could not be removed")}
+    try{await removePhoto(item);await refresh()}
+    catch(e){setErr(`${item}: ${e instanceof Error?e.message:"that photo could not be removed"}`)}
     setBusy("");
   };
+  // A photo whose item no longer exists under that exact name — a renamed product, or a name that
+  // differs by a character. It is not lost, it is just not attached to anything the floor will look up.
+  const orphans=Object.keys(urls).filter(k=>!items.includes(k));
   return <section className="panel photo-panel">
     <div className="panel-title"><div><h2>Product photos</h2><p>What the floor sees on the tablet when they pack an order. A picture identifies a bottle faster than a name does.</p></div></div>
     {err&&<p className="form-error">{err}</p>}
@@ -273,6 +279,9 @@ export function ProductPhotos(){
       </div>)}
       {!items.length&&<p className="empty-list">Add a finished product first and its photo can live here.</p>}
     </div>
+    {orphans.length>0&&<p className="link-warning" style={{color:"#a84e13"}}>
+      {orphans.length} photo{orphans.length===1?"":"s"} {orphans.length===1?"is":"are"} filed under a name no product has any more — {orphans.join(", ")}. Rename the product back, or add the photo again under its current name.
+    </p>}
     <p className="link-warning">Photos are resized in the browser before they are saved, and kept in the company database — not on the web server&apos;s disk, which is wiped on every deploy.</p>
   </section>;
 }

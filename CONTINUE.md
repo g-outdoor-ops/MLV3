@@ -17,8 +17,8 @@ to invoicing or payments as touching real money.
 
 ## The state of play
 
-`main` is deployed and pushed through **`9abd116`** — Phases 1-10. Phase 11 is in the tree, uncommitted:
-product photos.
+`main` is deployed and pushed through **`7031496`** — Phases 1-11. Phase 12 is in the tree, uncommitted:
+three fixes reported from use.
 
 The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
 The production rebuild is `4b2ed00` (Phase 1, model), `8c0bf42` (Phase 2, the calendar) and Phase 3 in
@@ -420,7 +420,7 @@ Two defects the render caught: the due date showed **Invalid Date** for orders s
 label rather than an ISO date (the floor view normalises it now, and the screen shows an unreadable date
 as it was stored), and the batch id and note had picked up the big centred styling meant for quantities.
 
-### Phase 11 — product photos (in the tree, uncommitted)
+### Phase 11 — product photos (`7031496`)
 
 A photo identifies a bottle across a bench far faster than a name does — "5 Gal + 2 Screw Caps" and
 "5 Gal + 1 Silicone Cap" are one word apart on a screen and obvious side by side in a picture. Photos
@@ -446,6 +446,31 @@ and the warehouse tablet all reach the same image with no second identifier to k
 Also: the floor's empty state used to say only "Nothing to do at this station right now". It now says
 *why* — no jobs released at all, nothing at this station, or nothing in this tab — because those are
 three different problems with three different fixes.
+
+### Phase 12 — three things reported from use (in the tree, uncommitted)
+
+**"The site randomly refreshes back to dashboard."** A save that lost a version race reloaded the whole
+page, which threw the person back to their home screen. That was tolerable when the only writers were
+two people in an office; it stopped being tolerable the moment the warehouse tablet started writing on
+every recorded bottle, which made a stale version an ordinary event. The **record** is reloaded now, not
+the page: the screen catches up, the person stays where they were, and they are told their last change
+was not kept rather than having it silently applied over newer data. A tab also catches up when it is
+looked at again after being left open — but never while a modal or drawer is open, which would move the
+ground under somebody mid-edit.
+
+**"One photo keeps disappearing."** `writePhoto` was a DELETE followed by an INSERT — two commits, and
+if the second failed the first had already thrown the old photo away. It is one `ON CONFLICT` statement
+now, so replacing a photo can never leave the product with none. The panel also re-reads the list from
+the store after every change instead of trusting what it hoped it saved, and it now names any photo
+filed under an item name **no product has any more** — a renamed product is the likeliest reason a photo
+looks lost when it is really still there under the old name.
+
+**"The edit button can't change what item is manufactured."** The step editor could change quantity, day,
+source and note but not the product — so a step raised against the wrong thing had to be deleted and
+typed again, even though `guardStepEdit` has always had a branch for exactly that change. It has a
+*Makes* field now. Moulding is chosen from blanks and everything after it from products, and each blank
+is labelled with what it becomes ("Regular 5-gal — for 5-Gallon Bottle · no cap") because nobody orders
+a blank by name.
 
 ### Still open on the floor screen
 
@@ -535,7 +560,7 @@ on Render before the tablet is handed over.
 
 - **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
   `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
-  Run with `node tests/<name>.test.mjs`. 397 assertions.
+  Run with `node tests/<name>.test.mjs`. 402 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.

@@ -470,6 +470,21 @@ t("and deletes through deleteRun",drawer.includes("deleteRun("));
 t("editing a run no longer writes on every keystroke",!/onChange=\{e=>upd\(\{(line|date|quantity)/.test(drawer));
 }
 
+// The step editor has to be able to change what a step makes. The guard has always had a branch for it
+// — the form simply never offered the field, so a step raised against the wrong product could only be
+// deleted and typed again.
+if(app){
+const ui=readFileSync(new URL("../app/components/prodplan.tsx",import.meta.url),"utf8");
+console.log("\nA step can be pointed at a different product:");
+const editor=ui.slice(ui.indexOf("function EditStep("),ui.indexOf("function AddStep("));
+t("the editor offers what the step makes",/setTarget/.test(editor)&&/<label>Makes/.test(editor));
+t("and sends the change through the guard",/next\.target=target/.test(editor));
+t("the guard has something to say about it",
+  /Changing what this step makes/.test(app.guardStepEdit({id:"x",type:"mold",source:"amazon",target:"b-s5",qty:10,done:true},{target:"b-r5"})||""));
+t("moulding is chosen from blanks, the rest from products",/step\.type==="mold"\?blanks:\[\.\.\.skus,\.\.\.blanks\]/.test(editor));
+t("and a blank says which product it becomes",/for \$\{makes\.join/.test(ui));
+}
+
 // One calendar, not two. The month grid and the day list were separate screens drawing overlapping
 // work; a second one creeping back is the regression worth catching in the source.
 console.log("\nThere is one production calendar:");

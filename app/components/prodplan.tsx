@@ -217,7 +217,7 @@ export function ProductionCalendarView(){
         <div className="plan-machines">{loads.map(l=><Meter key={l.machine.id} load={l}/>)}</div>
         {over&&<p className="plan-over-note">Over capacity — {loads.filter(l=>l.over>0).map(l=>`${l.machine.name} by ${num(l.over)}`).join(", ")}. Move work to another day or the date this promises will slip.</p>}
 
-        {adding===day.date&&<AddStep date={day.date} blanks={blanks} skus={skus} onCancel={()=>setAdding(null)}
+        {adding===day.date&&<AddStep date={day.date} blanks={blankOptions(blanks,data.itemRates)} skus={skus} onCancel={()=>setAdding(null)}
           onAdd={st=>{writeDays(ds=>relocate(ds,st,day.date),"plan.step.add",`${TYPE_LABEL[st.type]} ${st.qty} added to ${day.date}`);setAdding(null)}}/>}
 
         <div className="plan-steps">
@@ -261,7 +261,7 @@ export function ProductionCalendarView(){
               {reconciling===st.id&&<Amount label={`True quantity made — corrects the record, and notes that you were the one who did it.`}
                 initial={progress.made||st.qty} confirm="Correct the record" onCancel={()=>setReconciling(null)} onSave={n=>reconcile(st,n)}/>}
 
-              {editing===st.id&&<EditStep step={st} day={day}
+              {editing===st.id&&<EditStep step={st} day={day} blanks={blankOptions(blanks,data.itemRates)} skus={skus}
                 onCancel={()=>setEditing(null)}
                 onSave={(next,toDate)=>{
                   // Nothing is written until guardStepEdit has had its say. It never blocks the edit —
@@ -389,6 +389,16 @@ function RushPreview({data,order,why,setWhy,onCancel,onConfirm}:{data:AppData;or
  * what made the two screens look like different schedules.
  */
 const SHOWN=3;                      // chips a month cell shows before it starts counting
+
+/**
+ * Blanks, labelled with what they become. A mould step genuinely makes a blank, but nobody orders a
+ * "Regular 5-gal" — they order the bottle it turns into, and the two vocabularies meeting on a dropdown
+ * is where somebody picks the wrong one.
+ */
+const blankOptions=(blanks:Blank[],rates:{item:string;blankId?:string}[])=>blanks.map(b=>{
+  const makes=rates.filter(r=>r.blankId===b.id).map(r=>r.item);
+  return {id:b.id,name:makes.length?`${b.name} — for ${makes.join(", ")}`:b.name};
+});
 function MonthGrid({ym,days,data,blanks,machines,runs,everyStep,filter,owner,selected,moving,setMoving,onPick,onOpen,onMove}:{
   ym:string;days:ProdDay[];data:AppData;blanks:Blank[];machines:Machine[];runs:WorkOrder[];everyStep:ProdStep[];
   filter:"all"|ProdSource;owner:boolean;selected:string;moving:string|null;setMoving:(v:string|null)=>void;
@@ -554,21 +564,31 @@ function Amount({label,initial,confirm,extra,onSave,onCancel}:{label:string;init
 }
 
 /** Editing a planned step: quantity, the day it sits on, which side of the business, and a note. */
-function EditStep({step,day,onSave,onCancel}:{step:ProdStep;day:ProdDay;onSave:(next:Partial<ProdStep>,toDate:string)=>void;onCancel:()=>void}){
+function EditStep({step,day,blanks,skus,onSave,onCancel}:{step:ProdStep;day:ProdDay;blanks:{id:string;name:string}[];skus:{id:string;name:string}[];onSave:(next:Partial<ProdStep>,toDate:string)=>void;onCancel:()=>void}){
   const [qty,setQty]=useState(String(step.qty));
   const [date,setDate]=useState(day.date);
   const [source,setSource]=useState<ProdSource>(step.source);
   const [note,setNote]=useState(step.note||"");
+  // What the step makes was the one thing this form could not change, so a step raised against the
+  // wrong product had to be removed and typed again. Moulding makes a blank; everything after it
+  // usually names a SKU — and wholesale sells the plain bottle, so blanks stay available there too.
+  const [target,setTarget]=useState(step.target);
+  const options=step.type==="mold"?blanks:[...skus,...blanks];
   const save=()=>{
     const next:Partial<ProdStep>={};
     const n=Math.max(0,Number(qty)||0);
     if(n!==step.qty)next.qty=n;
     if(source!==step.source)next.source=source;
+    if(target!==step.target)next.target=target;
     if(note!==(step.note||""))next.note=note;
     if(!Object.keys(next).length&&date===day.date){onCancel();return}   // nothing actually changed
     onSave(next,date);
   };
   return <div className="plan-form">
+    <label>Makes<select value={target} onChange={e=>setTarget(e.target.value)}>
+      {[...new Set([step.target,...options.map(o=>o.id)])].map(id=>
+        <option key={id} value={id}>{options.find(o=>o.id===id)?.name||id}</option>)}
+    </select></label>
     <label>Planned quantity<input inputMode="numeric" value={qty} onChange={e=>setQty(e.target.value)}/></label>
     <label>Day<input type="date" value={date} onChange={e=>setDate(e.target.value||day.date)}/></label>
     <label>For<select value={source} onChange={e=>setSource(e.target.value as ProdSource)}>

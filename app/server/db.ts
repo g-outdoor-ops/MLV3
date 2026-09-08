@@ -93,10 +93,17 @@ export async function listPhotos(){
   const rows=await db.query("SELECT item,updated_at,bytes FROM item_photos");
   return rows.map(r=>({item:String(r.item),updatedAt:String(r.updated_at),bytes:Number(r.bytes)}));
 }
+/**
+ * Save a photo against an item.
+ *
+ * One statement, not a delete followed by an insert: those are two commits, and if the second one fails
+ * the first has already thrown away the photo that was there. Replacing a photo must never be able to
+ * leave the product with none. ON CONFLICT is supported by both Postgres and SQLite/D1.
+ */
 export async function writePhoto(item:string,mime:string,data:string,by:string){
   const db=await getDb();const now=new Date().toISOString();
-  await db.exec("DELETE FROM item_photos WHERE item=$1",[item]);
-  await db.exec("INSERT INTO item_photos(item,mime,data,bytes,updated_at,updated_by) VALUES($1,$2,$3,$4,$5,$6)",
+  await db.exec(`INSERT INTO item_photos(item,mime,data,bytes,updated_at,updated_by) VALUES($1,$2,$3,$4,$5,$6)
+    ON CONFLICT(item) DO UPDATE SET mime=$2,data=$3,bytes=$4,updated_at=$5,updated_by=$6`,
     [item,mime,data,Math.round(data.length*3/4),now,by]);
   await audit(by,"photo.set",`Photo set for ${item}`);
   return now;

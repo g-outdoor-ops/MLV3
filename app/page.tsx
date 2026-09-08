@@ -31,23 +31,43 @@ export default function Home(){
   useEffect(()=>{if(!auth.user)return;let live=true;Promise.resolve().then(()=>{if(live)setLoaded(false)});fetch("/api/state").then(r=>r.ok?r.json():Promise.reject()).then(x=>{setData(normalize(x.data));versionRef.current=Number(x.version)||0}).catch(()=>setToast("Working offline — changes will retry")).finally(()=>{if(live)setLoaded(true)});
     const m=new URLSearchParams(window.location.search).get("qbo");if(m){Promise.resolve().then(()=>{if(live)setToast(m==="connected"?"QuickBooks connected":`QuickBooks: ${m}`)});history.replaceState(null,"",window.location.pathname+window.location.hash)}return()=>{live=false}},[auth.user]);
   useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(""),3600);return()=>clearTimeout(t)},[toast]);
+  useEffect(()=>{
+    if(!auth.user)return;
+    const catchUp=()=>{
+      if(document.visibilityState!=="visible")return;
+      if(modal.type||record||customerId)return;          // somebody is mid-edit; leave them alone
+      fetch("/api/state").then(r=>r.ok?r.json():null).then((x:{data?:AppData;version?:number}|null)=>{
+        if(x?.data&&Number(x.version)!==versionRef.current){setData(normalize(x.data));versionRef.current=Number(x.version)||0}
+      }).catch(()=>{/* offline; the screen keeps what it has */});
+    };
+    document.addEventListener("visibilitychange",catchUp);
+    return ()=>document.removeEventListener("visibilitychange",catchUp);
+  },[auth.user,modal.type,record,customerId]);
 
   const role:Role=auth.user?.role||"sales";
   const home=role==="owner"?"Control center":role==="floor"?"Production":"Dashboard";
   const currentNav=nav||home;
   // Every save carries the version this client loaded. If someone else saved in the meantime the
   // server rejects it with 409 rather than letting the last writer silently erase the other's work.
-  // On a conflict the only honest thing to do is reload: this client is holding a whole stale copy of
-  // the company record, so retrying would just overwrite the newer data with the same old blob.
+  //
+  // A conflict used to reload the whole page, which threw away wherever the person was and dropped them
+  // back on the dashboard. That was tolerable when the only writers were two people in an office; it is
+  // not now the warehouse tablet writes every time somebody records a bottle, which makes a stale
+  // version an ordinary event rather than a rare one. So the RECORD is reloaded, not the page: the
+  // screen catches up, the person stays where they were, and their last change is not silently applied
+  // on top of newer data — they are told to make it again.
   const commit=useCallback<AppContextValue["commit"]>((next,action="update",summary="Company data updated")=>{setData(current=>{const resolved=normalize(next(current));
     fetch("/api/state",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({data:resolved,action,summary,version:versionRef.current})})
       .then(async r=>{
         if(r.status===401){setToast("Your session ended — please sign in again");setAuth(a=>({...a,user:null}));return}
         if(r.status===409){
           const c=await r.json().catch(()=>({})) as {updatedBy?:string};
-          const who=(c.updatedBy||"Someone else").replace(/\s*<[^>]*>/,"");
-          setToast(`${who} saved changes while you were working — reloading so you don't overwrite them`);
-          if(typeof window!=="undefined")setTimeout(()=>window.location.reload(),2200);
+          const who=(c.updatedBy||"Someone else").replace(/\s*<[^>]*>/,"").replace(/^Warehouse link · /,"");
+          try{
+            const fresh=await fetch("/api/state").then(x=>x.ok?x.json():null) as {data?:AppData;version?:number}|null;
+            if(fresh?.data){setData(normalize(fresh.data));versionRef.current=Number(fresh.version)||0}
+          }catch{/* offline: the next save will conflict again and try once more */}
+          setToast(`${who} saved first — this screen is now up to date, but your last change was not kept. Please make it again.`);
           return;
         }
         if(!r.ok){setToast("Could not save yet — please try again");return}
