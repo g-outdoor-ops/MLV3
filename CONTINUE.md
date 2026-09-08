@@ -17,8 +17,8 @@ to invoicing or payments as touching real money.
 
 ## The state of play
 
-`main` is deployed and pushed through **`e1928b1`** — Phases 1-13. Phase 14 is in the tree, uncommitted:
-the inventory side joined up.
+`main` is deployed and pushed through **`2905144`** — Phases 1-14. Phase 15 is in the tree, uncommitted:
+one product record replacing item rates, inventory details and SKUs.
 
 The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
 The production rebuild is `4b2ed00` (Phase 1, model), `8c0bf42` (Phase 2, the calendar) and Phase 3 in
@@ -495,7 +495,7 @@ through the audit log.
 `blanks` and `skus` are also **owner-only on the server** now, alongside settings, roles and item rates.
 They are catalogue: a floor tablet had no business being able to rewrite them.
 
-### Phase 14 — the inventory side, joined up (in the tree, uncommitted)
+### Phase 14 — the inventory side, joined up (`2905144`)
 
 Four things from setting up real item rates.
 
@@ -523,13 +523,42 @@ Four things from setting up real item rates.
   Photos hang off the item rate's *name*, which is also the inventory row's name, so one picture serves
   the inventory list, the build sheet and the tablet.
 
-### Still open on the inventory side
+### Phase 15 — one product (in the tree, uncommitted)
 
-- **Item rates and products are still two lists for one thing.** The link makes them work together; it
-  does not merge them. A wholesale-only product needs no Amazon listing and an Amazon listing without an
-  item rate has no price — which is correct, but somebody has to keep both in step by hand.
-- **Blanks and products have no photos of their own** — only item rates do, which is why the link
-  matters.
+A product was three records on three screens — an item rate for its price and how it is made, an
+inventory row for how many there are, a SKU for the Amazon listing — joined by the item's name and
+edited separately. So they drifted: a price with no stock line, a listing with no price, a photo filed
+under a name nothing matched.
+
+**`Product` is the whole thing as one record**, and `app/components/products.tsx` is the one screen:
+what it is, what it costs, what it sells for, which mould it comes from and what it is made of, how it
+is packed and shipped, how many are on the shelf, its listing code, and its photo — one form, one save.
+"Item rates" is gone from the nav; **Products** replaces it, and the moulds table sits underneath the
+products that reference it.
+
+**It is a view, not a fourth table.** `products(data)` joins by name; `saveProduct()` is the only writer
+and updates the item rate, the stock line and the listing together, so they cannot come apart again.
+That is deliberate: every money path in the app — invoice totals, COGS, the P&L, order pricing — reads
+`itemRates` and `inventory` directly, across about seventy call sites, and moving them to reorganise a
+catalogue would put invoicing at risk to tidy a screen. What changed is that there is now one shape to
+read and exactly one function that writes it.
+
+- **Renaming** carries the stock line, the listing and the photo. It deliberately does not rewrite
+  history — an invoice line records what was sold under the name it was sold under — and the form says
+  so, naming how many records keep the old name.
+- **Deleting** refuses while orders, runs, documents or plan steps still refer to it.
+- **A material named on a product becomes a countable stock line**, so the floor's readiness check has
+  something to check against.
+- **"We buy this in"** is now a real answer rather than an absence. An empty mould saved as `""` settles
+  the question; `undefined` means nobody has said, and only that shows as *Mould not set*. Bought-in
+  goods like cap packs were being flagged as unmakeable forever.
+
+### Still open on products
+
+- **Storage is still three arrays.** One writer keeps them in step and one view reads them, but a
+  direct edit elsewhere could still write only one. Nothing in the app does — the old editors are gone —
+  but the shape allows it.
+- **Only products have photos.** Blanks and moulds do not, which is fine while every product names one.
 
 ### Still open on the floor screen
 
@@ -619,7 +648,7 @@ on Render before the tablet is handed over.
 
 - **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
   `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
-  Run with `node tests/<name>.test.mjs`. 423 assertions.
+  Run with `node tests/<name>.test.mjs`. 448 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.

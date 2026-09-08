@@ -336,3 +336,31 @@
 .catalogue-map b{color:#25332a}
 .catalogue-note{margin:0 0 6px;font-size:.82rem;color:#6d7a70;line-height:1.55}
 .catalogue-grid.sku{grid-template-columns:.9fr 1.3fr .8fr 1.1fr 1.2fr 1.2fr .6fr auto}
+
+/* Products — one record per thing the shop sells. */
+.prod-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.prod-card{display:grid;grid-template-columns:74px 1fr;gap:12px;text-align:left;background:#fff;
+  border:1px solid #dfe6e1;border-radius:13px;padding:12px;width:100%;font:inherit;color:#25332a}
+.prod-card:hover{border-color:#9fb3a6}
+.prod-shot{aspect-ratio:1;border-radius:10px;background:#f6f8f6;border:1px solid #e6ece8;
+  display:grid;place-items:center;overflow:hidden}
+.prod-shot img{width:100%;height:100%;object-fit:cover}
+.prod-shot span{color:#9aa8a0;font-size:.7rem;font-weight:700;text-align:center;padding:4px}
+.prod-shot.big{width:150px;aspect-ratio:1}
+.prod-body{min-width:0}
+.prod-body b{display:block;font-size:.95rem;line-height:1.3}
+.prod-body small{display:block;color:#6d7a70;font-size:.78rem;margin-top:2px}
+.prod-tags{display:flex;gap:5px;flex-wrap:wrap;margin:7px 0}
+.prod-tags em{font-style:normal;background:#eef3ef;color:#4e5c53;border-radius:6px;padding:2px 7px;font-size:.68rem;font-weight:800}
+.prod-tags em.sku{background:#eaedfb;color:#3b4ba8;font-family:"Courier New",monospace}
+.prod-tags em.warn{background:#fdf2f0;color:#b3261e}
+.prod-nums{display:flex;gap:14px;border-top:1px solid #eef1ee;padding-top:8px}
+.prod-nums span{font-size:.92rem;font-weight:800;font-variant-numeric:tabular-nums}
+.prod-nums i{display:block;font-style:normal;color:#7b8880;font-size:.66rem;font-weight:800;margin-bottom:1px}
+.prod-modal{max-height:88vh;overflow-y:auto}
+.prod-sec{margin:18px 0 2px;font-size:.74rem;text-transform:uppercase;letter-spacing:.07em;color:#7b8880}
+.prod-edit-top{display:flex;gap:16px;align-items:flex-start;margin-top:12px}
+.prod-photo-actions{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.prod-photo-actions .secondary{cursor:pointer}
+.prod-modal .full-field{display:block;margin-top:12px;font-size:12px;font-weight:800}
+.prod-modal .full-field input{display:block;width:100%;border:1px solid #bcc9c0;border-radius:9px;padding:11px;margin-top:6px}

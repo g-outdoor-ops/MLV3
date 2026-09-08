@@ -485,6 +485,55 @@ t("moulding is chosen from blanks, the rest from products",/step\.type==="mold"\
 t("and a blank says which product it becomes",/for \$\{makes\.join/.test(ui));
 }
 
+// ---------------------------------------------------------------------------
+// One product. Price, stock and listing were three records joined by a name and edited on three
+// screens, so they drifted. There is one shape to read now and exactly one function that writes it.
+if(app){
+const {products,productOf,saveProduct,deleteProduct,productUses,normalize:nz,demoData:dm}=app;
+const base=nz(dm);
+
+console.log("\nA product is one record:");
+const p=productOf(base,"5-Gallon Bottle · 2 caps");
+t("it carries the price",p.rate>0);
+t("and the stock",p.onHand>0);
+t("and how it is made",!!p.blankId&&!!p.material);
+t("and how it is packed",p.unitsPerCase>0&&!!p.packedAs);
+t("and its listing",p.sku==="D5-T0WT-Q5XP",`${p.sku}`);
+t("a material is a product too, just not one we sell",products(base).some(x=>x.kind==="raw"));
+
+console.log("\nOne save writes all three:");
+const saved=saveProduct(base,{...p,rate:11.5,onHand:999,sku:"NEW-ASIN-1"});
+t("the price lands on the item rate",saved.itemRates.find(r=>r.item===p.name).rate===11.5);
+t("the count lands on the stock line",saved.inventory.find(i=>i.item===p.name).onHand===999);
+t("the listing lands on the sku",saved.skus.find(k=>k.itemId===p.name).id==="NEW-ASIN-1");
+t("and reading it back gives one record again",productOf(saved,p.name).rate===11.5&&productOf(saved,p.name).sku==="NEW-ASIN-1");
+// The drift this exists to prevent: a price with no stock line.
+const fresh=saveProduct(base,{...p,name:"Brand New Bottle",sku:undefined});
+t("a new product gets a stock line without being asked",!!fresh.inventory.find(i=>i.item==="Brand New Bottle"));
+t("and an item rate",!!fresh.itemRates.find(r=>r.item==="Brand New Bottle"));
+// A material named on a product has to be countable or the floor can never check it.
+const withMat=saveProduct(base,{...p,name:"Another Bottle",material:"HDPE pellets · natural"});
+t("a new material becomes a countable line",!!withMat.inventory.find(i=>i.item==="HDPE pellets · natural"&&i.kind==="raw"));
+
+console.log("\nRenaming carries everything that can safely follow:");
+const renamed=saveProduct(base,{...p,name:"5-Gallon · two screw caps"},p.name);
+t("the stock line follows",!!renamed.inventory.find(i=>i.item==="5-Gallon · two screw caps"));
+t("the old stock line is gone, not duplicated",!renamed.inventory.find(i=>i.item===p.name));
+t("the item rate follows",!!renamed.itemRates.find(r=>r.item==="5-Gallon · two screw caps"));
+t("the listing follows",renamed.skus.find(k=>k.id===p.sku).itemId==="5-Gallon · two screw caps");
+// History does not follow: an invoice records what was sold under the name it was sold under.
+t("what was already sold keeps the name it was sold under",
+  renamed.orders.some(o=>(o.lines||[]).some(l=>l.item===p.name)));
+
+console.log("\nNothing in use disappears quietly:");
+const uses=productUses(base,p.name);
+t("the app can say where a product is still referred to",uses.any>0,JSON.stringify({o:uses.orders.length,r:uses.runs.length,s:uses.steps}));
+t("a product nobody uses reports nothing",productUses(base,"Nothing Like This").any===0);
+const gone=deleteProduct(base,"Silicone Caps · 3-pack");
+t("deleting takes the stock line with it",!gone.inventory.some(i=>i.item==="Silicone Caps · 3-pack"));
+t("and the item rate",!gone.itemRates.some(r=>r.item==="Silicone Caps · 3-pack"));
+}
+
 // The plan schedules against blanks and SKUs. Those arrived with the model and were filled in from the
 // app's own defaults, so for a while the calendar referenced products the owner could not see anywhere.
 if(app){
@@ -492,12 +541,17 @@ const owner=readFileSync(new URL("../app/components/owner.tsx",import.meta.url),
 const modal=readFileSync(new URL("../app/components/modals.tsx",import.meta.url),"utf8");
 const authz=readFileSync(new URL("../app/server/authz.ts",import.meta.url),"utf8");
 console.log("\nEverything the plan references can be seen and changed:");
-t("there is an editor for blanks and products",/function CatalogueEditor/.test(owner));
-t("it is on the item rates screen",/<CatalogueEditor\/>/.test(owner));
+const prod=readFileSync(new URL("../app/components/products.tsx",import.meta.url),"utf8");
+t("there is an editor for the moulds",/function CatalogueEditor/.test(owner));
+t("it sits with the products that reference them",/<Moulds\/>/.test(prod));
 t("it saves in one go rather than on every keystroke",/dirty/.test(owner)&&/catalogue\.update/.test(owner));
 // Removing something the calendar points at would leave steps making a thing that no longer exists.
 t("it will not remove one the plan is using",/is on the production plan/.test(owner));
-t("and the code cannot be edited once it is referenced",/A code cannot be changed once the plan references it/.test(owner));
+t("nor one that products are moulded from",/point those at another mould first/.test(owner));
+// Everything else about a product is one record on one screen now.
+t("price, stock, listing and packing are one form",
+  /How it is made/.test(prod)&&/How it is packed and shipped/.test(prod)&&/How many there are/.test(prod)&&/Amazon listing code/.test(prod));
+t("and one writer",/saveProduct\(v,p,editing\.was\)/.test(prod));
 // They are catalogue, like prices: a floor tablet must not be able to rewrite them.
 t("blanks and products are owner-only on the server",/"blanks", "skus"/.test(authz));
 

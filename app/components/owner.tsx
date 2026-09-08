@@ -1,15 +1,16 @@
 "use client";
 import { useEffect, useState } from "react";
-import { CAP_KINDS, DEFAULT_BLANKS, DEFAULT_SKUS, newFloorToken, STAGES, STAGE_NEW, STAGE_QUOTED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, documentTotal, dueDays, freeStock, orderTotals, seedData, stageOf, hasDemoData, type Blank, type InventoryRow, type Sku } from "../app-data";
+import { DEFAULT_BLANKS, newFloorToken, STAGES, STAGE_NEW, STAGE_QUOTED, STAGE_PAID, STAGE_PRODUCTION, STAGE_READY, STAGE_SHIPPED, STAGE_DONE, documentTotal, dueDays, freeStock, orderTotals, seedData, stageOf, hasDemoData, type Blank, type InventoryRow } from "../app-data";
 import { authCall, qboCall, type AuthUser } from "./auth";
 import { listPhotoItems, removePhoto, savePhoto } from "./photo";
+import { ProductsWorkspace } from "./products";
 import { CheckRow, ControlMetric, Decision, Kpi, MiniRow, PlRow, ReportCard, SettingRow, StatusLine, downloadCsv, num, uid, useApp, usd, usd2 } from "./store";
 import { Customers, DocList, Leads, OrdersPage } from "./sales";
 
 export const ownerGroups=[
   {label:"Sales & customers",items:["Order flow","Customers","Leads","Orders","Invoices","Quotes"]},
   {label:"Production",items:["Work orders","Production calendar","Quality","Maintenance"]},
-  {label:"Inventory & purchasing",items:["Inventory","Purchasing","Item rates"]},
+  {label:"Inventory & purchasing",items:["Products","Inventory","Purchasing"]},
   {label:"Financials",items:["Profit & loss","Reports"]},
   {label:"Administration",items:["Settings & access"]},
 ];
@@ -21,7 +22,7 @@ export function OwnerView({nav}:{nav:string}){
   if(nav==="Invoices")return <DocList kind="invoice"/>;
   if(nav==="Quotes")return <DocList kind="quote"/>;
   if(nav==="Work orders")return <WorkOrders/>;
-  if(nav==="Item rates")return <ItemRates/>;
+  if(nav==="Products")return <ProductsWorkspace/>;
   if(nav==="Inventory")return <InventoryWorkspace/>;
   if(nav==="Quality")return <QualityWorkspace/>;
   if(nav==="Maintenance")return <MaintenanceWorkspace/>;
@@ -85,12 +86,6 @@ export function WorkOrders(){
 }
 
 // =============================================================== ITEM RATES (live)
-export function ItemRates(){
-  const {data,setModal}=useApp();
-  return <><div className="heading-row"><div><p className="eyebrow">Owner controlled</p><h1>Item rates</h1><p className="intro">Sales quotes start at list. Below the floor, or past the discount limit, the owner approves.</p></div><button className="primary" onClick={()=>setModal("rate")}>+ Add item rate</button></div><article className="panel rate-table"><div className="table-head"><span>Item</span><span>Price each · floor</span><span>Minimum</span><span>Sales discount</span></div>{data.itemRates.filter(r=>r.kind!=="raw").map(r=><button key={r.id} onClick={()=>setModal("rate",r.id)}><b>{r.item}</b><strong>{usd2(r.rate)} <small>· floor {usd2(r.floor??0)} · cost {usd2(r.cost||0)}</small></strong><span>{num(r.minimum)} bottles</span><span>Up to {r.discountLimit}%</span></button>)}</article><CatalogueEditor/></>;
-}
-
-// =============================================================== INVENTORY (live)
 export function InventoryWorkspace(){
   const {data,setModal,commit,notify}=useApp();const fin=data.inventory.filter(i=>i.kind!=="raw");const raw=data.inventory.filter(i=>i.kind==="raw");
   const value=data.inventory.reduce((a,i)=>a+i.onHand*i.cost,0);const low=data.inventory.filter(i=>stockState(i)!=="Good");
@@ -239,36 +234,26 @@ export function SettingsWorkspace(){
 export function CatalogueEditor(){
   const {data,commit,notify}=useApp();
   const [blanks,setBlanks]=useState<Blank[]>(data.blanks?.length?data.blanks:DEFAULT_BLANKS);
-  const [skus,setSkus]=useState<Sku[]>(data.skus?.length?data.skus:DEFAULT_SKUS);
-  const dirty=JSON.stringify({blanks,skus})!==JSON.stringify({blanks:data.blanks,skus:data.skus});
+  const dirty=JSON.stringify(blanks)!==JSON.stringify(data.blanks);
   // How much of the plan points at each of these, so nothing in use disappears by accident.
   const uses=(id:string)=>(data.prodDays||[]).flatMap(d=>d.steps||[]).filter(x=>x.target===id).length;
   const save=()=>{
-    commit(v=>({...v,blanks,skus}),"catalogue.update","Moulds and products updated");
-    notify("Products and moulds saved","Item rates");
+    commit(v=>({...v,blanks}),"catalogue.update","Moulds updated");
+    notify("Moulds saved","Products");
   };
   const setBlank=(i:number,patch:Partial<Blank>)=>setBlanks(b=>b.map((x,k)=>k===i?{...x,...patch}:x));
-  const setSku=(i:number,patch:Partial<Sku>)=>setSkus(s=>s.map((x,k)=>k===i?{...x,...patch}:x));
-  const drop=(kind:"blank"|"sku",i:number)=>{
-    const id=kind==="blank"?blanks[i].id:skus[i].id;
-    if(uses(id)){notify(`${id} is on the production plan ${uses(id)} time${uses(id)===1?"":"s"} — take it off the calendar first`,"Item rates",true);return}
-    if(kind==="blank")setBlanks(b=>b.filter((_,k)=>k!==i));else setSkus(s=>s.filter((_,k)=>k!==i));
+  const drop=(i:number)=>{
+    const id=blanks[i].id;
+    if(uses(id)){notify(`${id} is on the production plan ${uses(id)} time${uses(id)===1?"":"s"} — take it off the calendar first`,"Products",true);return}
+    if((data.itemRates||[]).some(r=>r.blankId===id)){notify(`${blanks[i].name} is what some products are moulded from — point those at another mould first`,"Products",true);return}
+    setBlanks(b=>b.filter((_,k)=>k!==i));
   };
 
   return <section className="panel catalogue">
     <div className="panel-title">
-      <div><h2>Moulds &amp; products</h2><p>What the machines actually make, and what the production plan schedules against.</p></div>
+      <div><h2>Moulds</h2><p>What a machine physically makes. Every product says which mould it comes from, and production schedules against these.</p></div>
     </div>
     <>
-      <ol className="catalogue-map">
-        <li><b>Blank</b> — what a machine moulds. Decides which line the run goes on.</li>
-        <li><b>Item rate</b> — the product as it is priced, stocked, packed and photographed. One stock
-          line in Inventory, one photo, one material, one box size.</li>
-        <li><b>Product</b> — an Amazon listing. Points at the blank it is moulded from, and at the item
-          rate it is priced and stocked as.</li>
-      </ol>
-      <p className="catalogue-note">Photos hang off the item rate&apos;s name, so a product linked to one shows the same picture on the warehouse tablet. A product with no item rate has no price, no stock line and no photo — the floor gets a name and nothing else.</p>
-      <h3 className="catalogue-head">Blanks — what comes off a machine</h3>
       <div className="catalogue-grid head"><span>Name</span><span>Size</span><span>Neck</span><span>Sold plain</span><span>On the plan</span><span/></div>
       {blanks.map((b,i)=><div className="catalogue-grid" key={b.id}>
         <input value={b.name} onChange={e=>setBlank(i,{name:e.target.value})}/>
@@ -276,38 +261,15 @@ export function CatalogueEditor(){
         <select value={b.neck} onChange={e=>setBlank(i,{neck:e.target.value as Blank["neck"]})}><option value="screw">Screw</option><option value="regular">Regular</option></select>
         <select value={b.sellable?"yes":"no"} onChange={e=>setBlank(i,{sellable:e.target.value==="yes"})}><option value="no">No</option><option value="yes">Yes</option></select>
         <em>{uses(b.id)||"—"}</em>
-        <button className="link-button" onClick={()=>drop("blank",i)}>Remove</button>
+        <button className="link-button" onClick={()=>drop(i)}>Remove</button>
       </div>)}
       <button className="secondary" onClick={()=>setBlanks(b=>[...b,{id:uid("b"),name:"New blank",size:"5-gal",neck:"regular"}])}>+ Add a blank</button>
 
-      <h3 className="catalogue-head">Products — what a blank becomes</h3>
-      <div className="catalogue-grid sku head"><span>Code</span><span>Name</span><span>Sold on</span><span>Moulded from</span><span>Priced &amp; stocked as</span><span>Caps</span><span>On the plan</span><span/></div>
-      {skus.map((x,i)=><div className="catalogue-grid sku" key={x.id}>
-        <b>{x.id}</b>
-        <input value={x.name} onChange={e=>setSku(i,{name:e.target.value})}/>
-        <select value={x.channel} onChange={e=>setSku(i,{channel:e.target.value as Sku["channel"]})}>
-          <option value="amazon">Amazon</option><option value="wholesale">Wholesale</option><option value="both">Both</option></select>
-        <select value={x.blankId} onChange={e=>setSku(i,{blankId:e.target.value})}>{blanks.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select>
-        <select value={x.itemId||""} onChange={e=>setSku(i,{itemId:e.target.value||undefined})}>
-          <option value="">Not linked</option>
-          {data.itemRates.filter(r=>r.kind!=="raw").map(r=><option key={r.id} value={r.item}>{r.item}</option>)}
-        </select>
-        <span className="catalogue-caps">
-          <input type="number" min="0" value={x.caps[0]?.qty??0}
-            onChange={e=>{const q=Math.max(0,Number(e.target.value)||0);setSku(i,{caps:q?[{component:x.caps[0]?.component||"Screw cap",qty:q}]:[]})}}/>
-          <select value={x.caps[0]?.component||"Screw cap"} disabled={!x.caps.length}
-            onChange={e=>setSku(i,{caps:[{component:e.target.value,qty:x.caps[0]?.qty||1}]})}>{CAP_KINDS.map(c=><option key={c}>{c}</option>)}</select>
-        </span>
-        <em>{uses(x.id)||"—"}</em>
-        <button className="link-button" onClick={()=>drop("sku",i)}>Remove</button>
-      </div>)}
-      <button className="secondary" onClick={()=>setSkus(s=>[...s,{id:`NEW-${s.length+1}`,name:"New product",channel:"amazon",blankId:blanks[0]?.id||"",caps:[]}])}>+ Add a product</button>
-
       <div className="button-row" style={{marginTop:14}}>
-        {dirty&&<button className="cancel" onClick={()=>{setBlanks(data.blanks||DEFAULT_BLANKS);setSkus(data.skus||DEFAULT_SKUS)}}>Discard changes</button>}
-        <button className="primary" disabled={!dirty} onClick={save}>{dirty?"Save moulds & products":"Saved"}</button>
+        {dirty&&<button className="cancel" onClick={()=>setBlanks(data.blanks||DEFAULT_BLANKS)}>Discard changes</button>}
+        <button className="primary" disabled={!dirty} onClick={save}>{dirty?"Save moulds":"Saved"}</button>
       </div>
-      <p className="link-warning">A code cannot be changed once the plan references it — the calendar would lose track of what it is making. Add a new product instead.</p>
+      <p className="link-warning">A mould that products are made from, or that the plan is using, cannot be removed until those point somewhere else.</p>
     </>
   </section>;
 }

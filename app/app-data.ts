@@ -35,6 +35,118 @@ export type WorkOrder={id:string;orderId?:string;kind?:"mould"|"assembly";item:s
   // Packing is its own job with its own owner: the person who boxes a run is often not the person who
   // moulded it, and "who made this" and "who packed this" are different answers to different questions.
   packing?:PackingRecord};
+// ---- one product ---------------------------------------------------------------------
+// A product was three records in three places: an item rate (price, how it is made, how it is packed),
+// an inventory row (how many there are), and a SKU (the Amazon listing). They were joined by the item's
+// name and edited on three screens, so they drifted — a price with no stock line, a listing with no
+// price, a photo filed under a name nothing matched.
+//
+// This is the whole thing as one record. It is a VIEW joined by name, not a fourth table: every money
+// path in the app — invoice totals, COGS, the P&L, order pricing — reads itemRates and inventory
+// directly, and moving them to reorganise a catalogue would put invoicing at risk to tidy a screen.
+// What changes is that there is now one shape to read and exactly one function that writes it, so the
+// three cannot fall out of step.
+export type Product={
+  name:string;sub?:string;kind:"finished"|"raw";
+  sku?:string;channel?:"amazon"|"wholesale"|"both";
+  rate:number;floor?:number;minimum:number;discountLimit:number;cost:number;
+  blankId?:string;caps:AssemblyCap[];material?:string;mold?:string;colour?:string;qcChecks?:string[];
+  unitsPerCase:number;packedAs:"loose"|"boxed"|"pallet";shipsAs:"boxed"|"pallet-boxed"|"pallet-loose";
+  perPallet?:number;boxItem?:string;boxSize?:string;palletPattern?:string;label?:string;
+  onHand:number;committed:number;reorder:number;unit?:string;onOrder?:number;eta?:string;supplier?:string;
+  instructions?:string;
+};
+
+/** Everything the shop sells or stocks, as one record each. */
+export function products(data:AppData):Product[]{
+  const rates=data.itemRates||[];const rows=data.inventory||[];const skus=data.skus||[];
+  const names=Array.from(new Set([...rows.map(i=>i.item),...rates.map(r=>r.item)]));
+  return names.map(name=>{
+    const r=rates.find(x=>x.item===name);
+    const i=rows.find(x=>x.item===name);
+    const k=skus.find(x=>x.itemId===name);
+    return {
+      name,sub:r?.sub,kind:(i?.kind||r?.kind||"finished") as "finished"|"raw",
+      sku:k?.id,channel:k?.channel,
+      rate:r?.rate??0,floor:r?.floor,minimum:r?.minimum??0,discountLimit:r?.discountLimit??0,
+      cost:r?.cost??i?.cost??0,
+      blankId:r?.blankId,caps:r?.caps||[],material:r?.material,mold:r?.mold,colour:r?.colour,qcChecks:r?.qcChecks,
+      unitsPerCase:r?.unitsPerCase??2,packedAs:r?.packedAs||"boxed",
+      shipsAs:r?.shipsAs||(r?.casesPerPallet?"pallet-boxed":"boxed"),
+      perPallet:r?.perPallet??r?.casesPerPallet,boxItem:r?.boxItem,boxSize:r?.boxSize,
+      palletPattern:r?.palletPattern,label:r?.label,
+      onHand:i?.onHand??0,committed:i?.committed??0,reorder:i?.reorder??0,unit:i?.unit,
+      onOrder:i?.onOrder,eta:i?.eta,supplier:i?.supplier,
+      instructions:r?.instructions,
+    };
+  });
+}
+export const productOf=(data:AppData,name:string)=>products(data).find(p=>p.name===name);
+
+/**
+ * The only writer. Price, stock, listing and packing go in together, or the three fall out of step
+ * again — which is the whole reason this exists.
+ *
+ * A rename carries the stock line and the listing with it. It deliberately does not rewrite history:
+ * an invoice line records what was sold under the name it was sold under.
+ */
+export function saveProduct(data:AppData,p:Product,previousName?:string):AppData{
+  const was=previousName&&previousName!==p.name?previousName:null;
+  const key=was||p.name;
+  const rate:ItemRate={
+    id:(data.itemRates||[]).find(r=>r.item===key)?.id||`i${Date.now().toString(36)}`,
+    item:p.name,sub:p.sub,rate:p.rate,floor:p.floor,minimum:p.minimum,discountLimit:p.discountLimit,
+    unitsPerCase:p.unitsPerCase,kind:p.kind,cost:p.cost,qcChecks:p.qcChecks||DEFAULT_QC,
+    material:p.material,blankId:p.blankId,caps:p.caps,mold:p.mold,colour:p.colour,label:p.label,
+    boxItem:p.boxItem,boxSize:p.boxSize,packedAs:p.packedAs,shipsAs:p.shipsAs,perPallet:p.perPallet,
+    casesPerPallet:p.shipsAs==="pallet-boxed"?p.perPallet:undefined,
+    palletPattern:p.palletPattern,instructions:p.instructions,
+  };
+  const oldRow=(data.inventory||[]).find(i=>i.item===key);
+  const row:InventoryRow={
+    id:oldRow?.id||`s${Date.now().toString(36)}`,item:p.name,kind:p.kind,
+    onHand:p.onHand,committed:p.committed,reorder:p.reorder,cost:p.cost,
+    unit:p.unit,onOrder:p.onOrder,eta:p.eta,supplier:p.supplier,usage:oldRow?.usage,
+  };
+  const rates=(data.itemRates||[]).some(r=>r.item===key)
+    ?(data.itemRates||[]).map(r=>r.item===key?rate:r):[...(data.itemRates||[]),rate];
+  let inventory=(data.inventory||[]).some(i=>i.item===key)
+    ?(data.inventory||[]).map(i=>i.item===key?row:i):[...(data.inventory||[]),row];
+  // A material named on a product has to be countable, or the floor's readiness check has nothing to
+  // check it against; it becomes a raw line the first time it is mentioned.
+  if(p.material&&!inventory.some(i=>i.item===p.material))
+    inventory=[...inventory,{id:`s${Date.now().toString(36)}m`,item:p.material,kind:"raw" as const,onHand:0,committed:0,reorder:0,cost:0,unit:"units"}];
+  let skus=(data.skus||[]).map(k=>k.itemId===key?{...k,itemId:p.name}:k);
+  if(p.sku){
+    const existing=skus.find(k=>k.id===p.sku);
+    const entry:Sku={id:p.sku,name:p.name,channel:p.channel||"amazon",blankId:p.blankId||existing?.blankId||"",
+      caps:p.caps,itemId:p.name,unitsPerPalletLtl:existing?.unitsPerPalletLtl,unitsPerPalletFtl:existing?.unitsPerPalletFtl};
+    skus=existing?skus.map(k=>k.id===p.sku?entry:k):[...skus,entry];
+    // One listing to one product: a code moved here is taken off whatever held it before.
+    skus=skus.map(k=>k.id!==p.sku&&k.itemId===p.name?{...k,itemId:undefined}:k);
+  }else{
+    skus=skus.map(k=>k.itemId===p.name?{...k,itemId:undefined}:k);
+  }
+  return {...data,itemRates:rates,inventory,skus};
+}
+
+/** Remove a product, its stock line and its listing. History keeps the name it was sold under. */
+export function deleteProduct(data:AppData,name:string):AppData{
+  return {...data,
+    itemRates:(data.itemRates||[]).filter(r=>r.item!==name),
+    inventory:(data.inventory||[]).filter(i=>i.item!==name),
+    skus:(data.skus||[]).filter(k=>k.itemId!==name)};
+}
+
+/** Where a product is still referred to, so nothing in use is deleted or renamed by surprise. */
+export function productUses(data:AppData,name:string){
+  const orders=(data.orders||[]).filter(o=>(o.lines||[]).some(l=>l.item===name)||o.item===name).map(o=>o.id);
+  const runs=(data.workOrders||[]).filter(w=>w.item===name).map(w=>w.id);
+  const steps=(data.prodDays||[]).flatMap(d=>d.steps||[]).filter(x=>x.target===name).length;
+  const docs=(data.documents||[]).filter(d=>(d.lines||[]).some(l=>l.item===name)).map(d=>d.id);
+  return {orders,runs,steps,docs,any:orders.length+runs.length+steps+docs.length};
+}
+
 // ---- the job traveller -------------------------------------------------------------
 // A schedule card says what is planned. A traveller says where the thing actually is: molded, checked,
 // packed, on the dock. The floor needs the second one — "what do I do next" is not answerable from a
