@@ -60,18 +60,21 @@ export type Product={
 /** Everything the shop sells or stocks, as one record each. */
 export function products(data:AppData):Product[]{
   const rates=data.itemRates||[];const rows=data.inventory||[];const skus=data.skus||[];
-  const names=Array.from(new Set([...rows.map(i=>i.item),...rates.map(r=>r.item)]));
+  // A listing is a product too. It joins on the catalogue name it is sold as, and a listing that has
+  // not been priced or counted yet has only its own name to go on — so that name stands in until it is
+  // saved. Leaving them out is what made the Amazon list read empty while six listings existed.
+  const names=Array.from(new Set([...rows.map(i=>i.item),...rates.map(r=>r.item),...skus.map(k=>k.itemId||k.name)]));
   return names.map(name=>{
     const r=rates.find(x=>x.item===name);
     const i=rows.find(x=>x.item===name);
-    const k=skus.find(x=>x.itemId===name);
+    const k=skus.find(x=>x.itemId===name)||skus.find(x=>!x.itemId&&x.name===name);
     return {
-      name,sub:r?.sub,kind:(i?.kind||r?.kind||"finished") as "finished"|"raw",
+      name,sub:r?.sub||(k&&k.name!==name?k.name:undefined),kind:(i?.kind||r?.kind||"finished") as "finished"|"raw",
       // The channel is the product's own, not the listing's: a wholesale bottle has no listing.
-      sku:k?.id,channel:r?.channel||(k?"amazon":"wholesale"),barcode:r?.barcode,includes:r?.includes||[],
+      sku:k?.id,channel:r?.channel||k?.channel||"wholesale",barcode:r?.barcode,includes:r?.includes||[],
       rate:r?.rate??0,floor:r?.floor,minimum:r?.minimum??0,discountLimit:r?.discountLimit??0,
       cost:r?.cost??i?.cost??0,
-      blankId:r?.blankId,caps:r?.caps||[],material:r?.material,mold:r?.mold,colour:r?.colour,qcChecks:r?.qcChecks,
+      blankId:r?.blankId??(k?.blankId||undefined),caps:r?.caps?.length?r.caps:(k?.caps||[]),material:r?.material,mold:r?.mold,colour:r?.colour,qcChecks:r?.qcChecks,
       unitsPerCase:r?.unitsPerCase??2,packedAs:r?.packedAs||"boxed",
       shipsAs:r?.shipsAs||(r?.casesPerPallet?"pallet-boxed":"boxed"),
       perPallet:r?.perPallet??r?.casesPerPallet,boxItem:r?.boxItem,boxSize:r?.boxSize,
@@ -137,7 +140,9 @@ export function deleteProduct(data:AppData,name:string):AppData{
   return {...data,
     itemRates:(data.itemRates||[]).filter(r=>r.item!==name),
     inventory:(data.inventory||[]).filter(i=>i.item!==name),
-    skus:(data.skus||[]).filter(k=>k.itemId!==name)};
+    // A listing that never got a catalogue name of its own is matched by its own name, which is what
+    // it was shown under.
+    skus:(data.skus||[]).filter(k=>k.itemId?k.itemId!==name:k.name!==name)};
 }
 
 /** Where a product is still referred to, so nothing in use is deleted or renamed by surprise. */
@@ -161,6 +166,12 @@ export type JobHold={reason:string;note?:string;by:string;at:string};
 /** The reasons the floor can give in one tap. "Other" takes a note. */
 export const HOLD_REASONS=["Machine down","Material unavailable","Wrong or damaged material","Quality problem",
   "Tooling / mould problem","Packaging unavailable","Waiting for instructions","Quantity mismatch","Other"];
+/**
+ * Why bottles were scrapped, in one tap. The count on its own says a run went badly; the reason is what
+ * anybody can act on, and asking for it at the moment it happened is the only time it is remembered.
+ */
+export const SCRAP_REASONS=["Short shot","Flash / trim","Contamination","Wrong colour","Dropped or crushed",
+  "Neck or thread fault","Startup waste","Other"];
 
 // The office screens read `status` and there are sixty of them, so the two vocabularies are mapped in
 // one place rather than rewritten everywhere. Legacy "Done" means the run finished under the old flow,
@@ -661,10 +672,65 @@ export const documentTotal=(d:DocumentRecord)=>{
   // taking the money.
   const fee=d.fee||0;
   if(d.lines&&d.lines.length)return Math.round((d.lines.reduce((a,l)=>a+l.quantity*l.rate,0)*(1-d.discount/100)+d.shipping+fee)*100)/100;
+  // An invoice imported before this app stored `total` and `lines` holds a SUMMED quantity next to ONE
+  // line's rate. Multiplying those is not an approximation of the invoice, it is a different number:
+  // 700 bottles × $9.40 on a four-line invoice that was actually $6,000. Twenty-four of them read as
+  // $2.2m on the dashboard. There is nothing here to compute a total from, so it counts as nothing
+  // until a re-import brings the books' own figure back — unrecordedTotals() names them on screen.
+  if(d.qboId||d.source==="quickbooks")return 0;
   return Math.round((((d.quantity??d.cases)*d.rate)*(1-d.discount/100)+d.shipping+fee)*100)/100;
 };
+/** An imported document whose real total was never stored, so nothing can be computed from it. */
+export const totalUnrecorded=(d:DocumentRecord)=>d.total==null&&!d.lines?.length&&!!(d.qboId||d.source==="quickbooks");
 // What is still owed. QuickBooks tells us directly; otherwise fall back to total less amount paid.
 export const documentBalance=(d:DocumentRecord)=>d.balance!=null?Math.round(d.balance*100)/100:Math.max(0,Math.round((documentTotal(d)-(d.paid||0))*100)/100);
+/**
+ * Invoices the dashboard cannot state a total for, and invoices whose stored total does not agree with
+ * their own line detail. Both are reasons a revenue figure is not what the owner expects, and both name
+ * the document rather than leaving a wrong number to be argued with.
+ */
+export type InvoiceProblem={id:string;customerId:string;why:"unrecorded"|"mismatch";shown:number;fromLines:number};
+export function invoiceProblems(data:AppData):InvoiceProblem[]{
+  const out:InvoiceProblem[]=[];
+  for(const d of data.documents||[]){
+    if(d.kind!=="invoice")continue;
+    if(totalUnrecorded(d)){out.push({id:d.id,customerId:d.customerId,why:"unrecorded",shown:0,fromLines:0});continue}
+    if(!d.lines?.length)continue;
+    const fromLines=Math.round((d.lines.reduce((a,l)=>a+l.quantity*l.rate,0)*(1-(d.discount||0)/100)+(d.shipping||0)+(d.fee||0))*100)/100;
+    const shown=documentTotal(d);
+    // Sales tax legitimately puts a stored total above its lines, so only a gap far larger than any tax
+    // rate counts as a disagreement worth stopping on.
+    if(Math.abs(shown-fromLines)>50&&Math.abs(shown-fromLines)>fromLines*0.2)
+      out.push({id:d.id,customerId:d.customerId,why:"mismatch",shown,fromLines});
+  }
+  return out.sort((a,b)=>Math.abs(b.shown-b.fromLines)-Math.abs(a.shown-a.fromLines));
+}
+/**
+ * What an invoice cost to make. From the order it billed where there is one, otherwise from its own
+ * lines, otherwise from the single-line summary. An item with no cost recorded is reported rather than
+ * counted as free — costing nothing is why a dashboard can claim a 100% margin.
+ */
+export function invoiceCost(data:AppData,d:DocumentRecord):{cost:number;unpriced:string[]}{
+  const o=d.orderId?(data.orders||[]).find(x=>x.id===d.orderId):undefined;
+  const lines=o?orderTotals(o,data).lines
+    :d.lines?.length?d.lines
+    :[{item:d.item,quantity:d.quantity??d.cases,rate:d.rate}];
+  let cost=0;const unpriced:string[]=[];
+  for(const l of lines){
+    if(!l.quantity)continue;
+    // History keeps the name a thing was sold under, which may since have gained a suffix, so an exact
+    // match is tried before a prefix one.
+    const rate=(data.itemRates||[]).find(r=>r.item===l.item)||(data.itemRates||[]).find(r=>l.item.startsWith(r.item));
+    if(rate?.cost)cost+=l.quantity*rate.cost;else unpriced.push(l.item);
+  }
+  return {cost:Math.round(cost*100)/100,unpriced};
+}
+/** Cost of goods for a set of invoices, and which products still have no cost against them. */
+export function invoiceCogs(data:AppData,invoices:DocumentRecord[]){
+  let cost=0;const unpriced=new Set<string>();
+  for(const d of invoices){const c=invoiceCost(data,d);cost+=c.cost;c.unpriced.forEach(i=>unpriced.add(i))}
+  return {cost:Math.round(cost*100)/100,unpriced:Array.from(unpriced)};
+}
 export const money=(n:number)=>"$"+n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 export const int=(n:number)=>Math.round(n).toLocaleString("en-US");
 // Orders saved by the earlier UI priced by the case; show them that way rather than re-pricing per bottle.
@@ -1455,5 +1521,21 @@ export function fmtDue(v?:string|null):string{
   if(!iso)return v?String(v):"—";
   const d=new Date(iso+"T12:00:00Z");
   return d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",timeZone:"UTC"});
+}
+/**
+ * When something is due, in the words somebody standing at a machine reads it. "Needed Tue, Sep 8"
+ * makes the reader work out what today is before they know whether to hurry; "Due today" does not.
+ * `today` is passed in rather than read from the clock so the floor and the server agree on the day.
+ */
+export function dueLabel(date?:string|null,dueAt?:string|null,today?:string):string{
+  const at=dueAt?` at ${new Date(dueAt).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}`:"";
+  const iso=dueIso(date);
+  if(!iso)return date?`Due ${date}${at}`:"No date set";
+  const now=today&&/^\d{4}-\d{2}-\d{2}$/.test(today)?today:todayIso();
+  if(iso<now)return `OVERDUE — was due ${fmtDue(iso)}`;
+  if(iso===now)return `Due today${at}`;
+  const t=new Date(now+"T12:00:00Z");t.setUTCDate(t.getUTCDate()+1);
+  if(iso===t.toISOString().slice(0,10))return `Due tomorrow${at}`;
+  return `Due ${fmtDue(iso)}${at}`;
 }
 export const daysFromNow=(n:number)=>{const x=new Date();x.setDate(x.getDate()+n);return x};

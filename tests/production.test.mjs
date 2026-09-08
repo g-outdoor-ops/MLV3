@@ -514,6 +514,29 @@ t("the screen has a list for each side",/setTab\("wholesale"\)/.test(prodUi)&&/s
 t("the listing block is only shown for a listing",/p\.channel!=="wholesale"&&<>/.test(prodUi));
 t("a listing can carry its own packed-unit photo",/packagingPhotoKey/.test(prodUi));
 
+// A listing used to have to match an item rate by name to be visible at all. Three of the six seeded
+// listings never had one, so the Amazon list read "Nothing here yet" while the plan was building them.
+console.log("\nA listing shows up before it has been priced or counted:");
+const listingOnly={...base,itemRates:[],inventory:[],
+  skus:[{id:"BV-B81Q-X4UN",name:"5 Gal + 2 Silicone Caps",channel:"amazon",blankId:"b-r5",caps:[{component:"Silicone cap",qty:2}]}]};
+const listed=products(listingOnly);
+t("it is in the catalogue on its own",listed.length===1,`${listed.length}`);
+t("under the name it is listed as",listed[0].name==="5 Gal + 2 Silicone Caps");
+t("carrying its code",listed[0].sku==="BV-B81Q-X4UN");
+t("and it lands on the Amazon side",listed[0].channel==="amazon");
+t("with the mould it is made on, so production can still schedule it",listed[0].blankId==="b-r5");
+t("every seeded listing is visible",products(base).filter(x=>x.sku).length===(base.skus||[]).length,
+  `${products(base).filter(x=>x.sku).length} of ${(base.skus||[]).length}`);
+// Saving it is what binds the listing to a catalogue name, so it stops being name-matched.
+const adopted=saveProduct(listingOnly,{...listed[0],rate:24.99,cost:6,onHand:12});
+t("saving it gives the listing a catalogue name",adopted.skus[0].itemId==="5 Gal + 2 Silicone Caps");
+t("and a price and a stock line come with it",
+  productOf(adopted,"5 Gal + 2 Silicone Caps").rate===24.99&&productOf(adopted,"5 Gal + 2 Silicone Caps").onHand===12);
+t("a listing-only product can be removed again",deleteProduct(listingOnly,"5 Gal + 2 Silicone Caps").skus.length===0);
+// A photo is filed under the product's name, so a brand-new product is saved first rather than refused.
+t("a new product saves itself when a photo is added",/if\(!editing\.was\)\{/.test(prodUi)&&/saveProduct\(v,p\)/.test(prodUi));
+t("the photo button is enabled as soon as it has a name",/disabled=\{!p\.name\.trim\(\)\|\|busy\}/.test(prodUi));
+
 console.log("\nOne save writes all three:");
 const saved=saveProduct(base,{...p,rate:11.5,onHand:999,sku:"NEW-ASIN-1",channel:"amazon"});
 t("the price lands on the item rate",saved.itemRates.find(r=>r.item===p.name).rate===11.5);

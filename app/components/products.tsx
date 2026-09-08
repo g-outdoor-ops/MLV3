@@ -97,9 +97,18 @@ export function ProductsWorkspace(){
     {editing&&<ProductEditor product={editing.p} was={editing.was}
       photo={editing.was?photos[editing.was]:undefined}
       packagingPhoto={editing.was?photos[packagingPhotoKey(editing.was)]:undefined}
-      onPhoto={async(file,packaging)=>{
-        if(!editing.was)throw new Error("Save the product first, then add its photo");
-        await savePhoto(packaging?packagingPhotoKey(editing.was):editing.was,file);
+      // A photo is filed under the product's name, so the product has to exist before one can be
+      // attached. Rather than refuse — which read as "you cannot add a photo at all" — a new product
+      // is saved first, on the spot, and the photo goes on the record that save just created.
+      onPhoto={async(file,packaging,current)=>{
+        const name=(current.name||"").trim();
+        if(!name)throw new Error("Give it a name first — the photo is filed under it");
+        if(!editing.was){
+          const p={...current,name};
+          commit(v=>saveProduct(v,p),"product.save",`${name} saved`);
+          setEditing({p,was:name});
+        }
+        await savePhoto(packaging?packagingPhotoKey(name):name,file);
         setPhotos(await listPhotoItems());
       }}
       onPhotoClear={async(packaging)=>{if(!editing.was)return;await removePhoto(packaging?packagingPhotoKey(editing.was):editing.was);setPhotos(await listPhotoItems())}}
@@ -122,7 +131,7 @@ export function ProductsWorkspace(){
 /** Everything about one product, in the order somebody actually thinks about it. */
 function ProductEditor({product,was,photo,packagingPhoto,onSave,onDelete,onClose,onPhoto,onPhotoClear}:{
   product:Product;was?:string;photo?:string;packagingPhoto?:string;onSave:(p:Product)=>void;onDelete:()=>void;onClose:()=>void;
-  onPhoto:(f:File,packaging?:boolean)=>Promise<void>;onPhotoClear:(packaging?:boolean)=>Promise<void>;
+  onPhoto:(f:File,packaging:boolean,current:Product)=>Promise<void>;onPhotoClear:(packaging?:boolean)=>Promise<void>;
 }){
   const {data}=useApp();
   const [p,setP]=useState<Product>(product);
@@ -141,7 +150,7 @@ function ProductEditor({product,was,photo,packagingPhoto,onSave,onDelete,onClose
   };
   const pick=async(f?:File,packaging?:boolean)=>{
     if(!f)return;setBusy(true);setErr("");
-    try{await onPhoto(f,packaging)}catch(e){setErr(e instanceof Error?e.message:"That photo could not be saved")}
+    try{await onPhoto(f,!!packaging,{...p,name:p.name.trim()})}catch(e){setErr(e instanceof Error?e.message:"That photo could not be saved")}
     setBusy(false);
   };
 
@@ -158,12 +167,12 @@ function ProductEditor({product,was,photo,packagingPhoto,onSave,onDelete,onClose
           {photo
             // eslint-disable-next-line @next/next/no-img-element
             ?<img src={photo} alt={p.name}/>
-            :<span>{was?"No photo":"Save first, then add a photo"}</span>}
+            :<span>{p.name.trim()?"No photo":"Name it, then add a photo"}</span>}
         </div>
         <div className="prod-photo-actions">
           <b className="prod-photo-label">The product</b>
           <label className="secondary">{busy?"Working…":photo?"Replace photo":"Add photo"}
-            <input type="file" accept="image/*" hidden disabled={!was||busy} onChange={e=>{pick(e.target.files?.[0]);e.target.value=""}}/></label>
+            <input type="file" accept="image/*" hidden disabled={!p.name.trim()||busy} onChange={e=>{pick(e.target.files?.[0]);e.target.value=""}}/></label>
           {photo&&<button className="cancel" onClick={()=>onPhotoClear()}>Remove photo</button>}
           <p className="hint">The same picture shows in this list, on the warehouse tablet and on the build sheet.</p>
         </div>
@@ -213,12 +222,12 @@ function ProductEditor({product,was,photo,packagingPhoto,onSave,onDelete,onClose
               {packagingPhoto
                 // eslint-disable-next-line @next/next/no-img-element
                 ?<img src={packagingPhoto} alt={`${p.name} packed`}/>
-                :<span>{was?"No packed-unit photo":"Save first, then add one"}</span>}
+                :<span>{p.name.trim()?"No packed-unit photo":"Name it, then add one"}</span>}
             </div>
             <div className="prod-photo-actions">
               <b className="prod-photo-label">Packed unit</b>
               <label className="secondary">{busy?"Working…":packagingPhoto?"Replace":"Add packaging photo"}
-                <input type="file" accept="image/*" hidden disabled={!was||busy} onChange={e=>{pick(e.target.files?.[0],true);e.target.value=""}}/></label>
+                <input type="file" accept="image/*" hidden disabled={!p.name.trim()||busy} onChange={e=>{pick(e.target.files?.[0],true);e.target.value=""}}/></label>
               {packagingPhoto&&<button className="cancel" onClick={()=>onPhotoClear(true)}>Remove</button>}
               <p className="hint">What a finished box should look like — the floor checks against it.</p>
             </div>
