@@ -48,7 +48,7 @@ export type WorkOrder={id:string;orderId?:string;kind?:"mould"|"assembly";item:s
 // three cannot fall out of step.
 export type Product={
   name:string;sub?:string;kind:"finished"|"raw";
-  sku?:string;channel?:"amazon"|"wholesale"|"both";
+  sku?:string;channel:"wholesale"|"amazon"|"both";barcode?:string;includes:{item:string;qty:number}[];
   rate:number;floor?:number;minimum:number;discountLimit:number;cost:number;
   blankId?:string;caps:AssemblyCap[];material?:string;mold?:string;colour?:string;qcChecks?:string[];
   unitsPerCase:number;packedAs:"loose"|"boxed"|"pallet";shipsAs:"boxed"|"pallet-boxed"|"pallet-loose";
@@ -67,7 +67,8 @@ export function products(data:AppData):Product[]{
     const k=skus.find(x=>x.itemId===name);
     return {
       name,sub:r?.sub,kind:(i?.kind||r?.kind||"finished") as "finished"|"raw",
-      sku:k?.id,channel:k?.channel,
+      // The channel is the product's own, not the listing's: a wholesale bottle has no listing.
+      sku:k?.id,channel:r?.channel||(k?"amazon":"wholesale"),barcode:r?.barcode,includes:r?.includes||[],
       rate:r?.rate??0,floor:r?.floor,minimum:r?.minimum??0,discountLimit:r?.discountLimit??0,
       cost:r?.cost??i?.cost??0,
       blankId:r?.blankId,caps:r?.caps||[],material:r?.material,mold:r?.mold,colour:r?.colour,qcChecks:r?.qcChecks,
@@ -98,6 +99,7 @@ export function saveProduct(data:AppData,p:Product,previousName?:string):AppData
     item:p.name,sub:p.sub,rate:p.rate,floor:p.floor,minimum:p.minimum,discountLimit:p.discountLimit,
     unitsPerCase:p.unitsPerCase,kind:p.kind,cost:p.cost,qcChecks:p.qcChecks||DEFAULT_QC,
     material:p.material,blankId:p.blankId,caps:p.caps,mold:p.mold,colour:p.colour,label:p.label,
+    channel:p.channel,barcode:p.barcode,includes:p.includes?.length?p.includes:undefined,
     boxItem:p.boxItem,boxSize:p.boxSize,packedAs:p.packedAs,shipsAs:p.shipsAs,perPallet:p.perPallet,
     casesPerPallet:p.shipsAs==="pallet-boxed"?p.perPallet:undefined,
     palletPattern:p.palletPattern,instructions:p.instructions,
@@ -119,7 +121,7 @@ export function saveProduct(data:AppData,p:Product,previousName?:string):AppData
   let skus=(data.skus||[]).map(k=>k.itemId===key?{...k,itemId:p.name}:k);
   if(p.sku){
     const existing=skus.find(k=>k.id===p.sku);
-    const entry:Sku={id:p.sku,name:p.name,channel:p.channel||"amazon",blankId:p.blankId||existing?.blankId||"",
+    const entry:Sku={id:p.sku,name:p.name,channel:p.channel==="wholesale"?"amazon":p.channel,blankId:p.blankId||existing?.blankId||"",
       caps:p.caps,itemId:p.name,unitsPerPalletLtl:existing?.unitsPerPalletLtl,unitsPerPalletFtl:existing?.unitsPerPalletFtl};
     skus=existing?skus.map(k=>k.id===p.sku?entry:k):[...skus,entry];
     // One listing to one product: a code moved here is taken off whatever held it before.
@@ -331,6 +333,16 @@ export type RoleSetting={id:string;name:string;members:string[];permissions:Reco
 export type ItemRate={id:string;item:string;rate:number;minimum:number;discountLimit:number;floor?:number;unitsPerCase?:number;kind?:"finished"|"raw";cost?:number;sub?:string;qcChecks?:string[];material?:string;blankId?:string;caps?:AssemblyCap[];
   // The build sheet — what somebody who has never made this before needs in front of them. "5 Gal + 2
   // Screw Caps" is a name, not an instruction.
+  // Which side of the business sells this. It lives on the product, not on the listing, because a
+  // wholesale bottle has no listing and still has a channel — and because sales only ever want to see
+  // one of these two lists while the floor needs to know which it is making.
+  channel?:"wholesale"|"amazon"|"both";
+  // The barcode the floor labels the bottle with. It has to be right: a mislabelled Amazon unit is a
+  // returned pallet, so it is shown on the job rather than looked up somewhere else.
+  barcode?:string;
+  // What goes in the box with the bottle for a listing — caps as a separate bag, an instruction card,
+  // a spare seal. Distinct from `caps`, which are fitted to the bottle at assembly.
+  includes?:{item:string;qty:number}[];
   // Two different questions, because the answers come apart: bottles can be boxed and then shipped
   // loose on a pallet, or shipped in boxes with no pallet at all. Together they decide what the packing
   // bench is asked to count — a product that never sees a pallet should not ask anybody for a pallet
@@ -602,11 +614,11 @@ export const demoData:AppData={
   {id:"r3",name:"Warehouse",members:["Luis"],permissions:{crm:"none",sales:"view",calendar:"view",financials:"none",operations:"edit",settings:"none"}},
  ],
  itemRates:[
-  {id:"i1",item:"5-Gallon Bottle · 2 caps",sub:"with 2 screw caps",mold:"5-gal screw-top mould",colour:"Natural",label:"Labels · 5-gal",boxItem:"Cartons 18×18×10",boxSize:"18×18×10",packedAs:"boxed",shipsAs:"pallet-boxed",perPallet:48,casesPerPallet:48,palletPattern:"6 per layer, 8 high, stretch-wrapped",instructions:"Caps hand-tightened, not cross-threaded. Label square to the handle.",rate:9.9,floor:8.75,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.85,material:"PET preforms · 780g (5-gal)",qcChecks:["Weight (780g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
-  {id:"i2",item:"3-Gallon Bottle · 2 caps",sub:"with 2 screw caps",mold:"3-gal screw-top mould",colour:"Natural",label:"Labels · 3-gal",boxItem:"Cartons 18×18×10",boxSize:"18×18×10",packedAs:"boxed",shipsAs:"pallet-boxed",perPallet:60,casesPerPallet:60,palletPattern:"10 per layer, 6 high, stretch-wrapped",rate:8.5,floor:7.6,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.1,material:"PET preforms · 560g (3-gal)",qcChecks:["Weight (560g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
-  {id:"i3",item:"5-Gallon Bottle · no cap",sub:"no cap",mold:"5-gal regular mould",colour:"Natural",label:"Labels · 5-gal",boxItem:"Cartons 18×18×10",boxSize:"18×18×10",packedAs:"boxed",shipsAs:"pallet-boxed",perPallet:48,casesPerPallet:48,palletPattern:"6 per layer, 8 high, stretch-wrapped",rate:8.6,floor:7.7,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.4,material:"PET preforms · 780g (5-gal)",qcChecks:["Weight (780g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
-  {id:"i4",item:"Screw Caps · 10-pack",sub:"pack of 10",rate:3.2,floor:2.4,minimum:10,discountLimit:10,unitsPerCase:20,kind:"finished",cost:0.61,material:"55mm screw caps (bulk)",qcChecks:["Thread fit on 55mm neck","Liner seated","Visual · flash / short shots"]},
-  {id:"i5",item:"Silicone Caps · 3-pack",sub:"pack of 3",rate:4.99,floor:3.8,minimum:10,discountLimit:10,unitsPerCase:30,kind:"finished",cost:1.15,material:"Silicone caps (bulk)",qcChecks:["Seal test on 55mm neck","Visual · tears / voids"]},
+  {id:"i1",item:"5-Gallon Bottle · 2 caps",sub:"with 2 screw caps",channel:"both",barcode:"X00ABC1234",includes:[{item:"Screw cap",qty:2},{item:"Care card",qty:1}],mold:"5-gal screw-top mould",colour:"Natural",label:"Labels · 5-gal",boxItem:"Cartons 18×18×10",boxSize:"18×18×10",packedAs:"boxed",shipsAs:"pallet-boxed",perPallet:48,casesPerPallet:48,palletPattern:"6 per layer, 8 high, stretch-wrapped",instructions:"Caps hand-tightened, not cross-threaded. Label square to the handle.",rate:9.9,floor:8.75,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.85,material:"PET preforms · 780g (5-gal)",qcChecks:["Weight (780g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
+  {id:"i2",item:"3-Gallon Bottle · 2 caps",sub:"with 2 screw caps",channel:"amazon",barcode:"X00DEF5678",includes:[{item:"Screw cap",qty:2}],mold:"3-gal screw-top mould",colour:"Natural",label:"Labels · 3-gal",boxItem:"Cartons 18×18×10",boxSize:"18×18×10",packedAs:"boxed",shipsAs:"pallet-boxed",perPallet:60,casesPerPallet:60,palletPattern:"10 per layer, 6 high, stretch-wrapped",rate:8.5,floor:7.6,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.1,material:"PET preforms · 560g (3-gal)",qcChecks:["Weight (560g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
+  {id:"i3",item:"5-Gallon Bottle · no cap",sub:"no cap",channel:"both",barcode:"X00GHI9012",mold:"5-gal regular mould",colour:"Natural",label:"Labels · 5-gal",boxItem:"Cartons 18×18×10",boxSize:"18×18×10",packedAs:"boxed",shipsAs:"pallet-boxed",perPallet:48,casesPerPallet:48,palletPattern:"6 per layer, 8 high, stretch-wrapped",rate:8.6,floor:7.7,minimum:50,discountLimit:5,unitsPerCase:2,kind:"finished",cost:4.4,material:"PET preforms · 780g (5-gal)",qcChecks:["Weight (780g ±10g)","Wall thickness · base","Leak test · 24h","Visual · haze / streaks","Neck finish 55mm gauge","Handle pull test"]},
+  {id:"i4",item:"Screw Caps · 10-pack",sub:"pack of 10",channel:"wholesale",rate:3.2,floor:2.4,minimum:10,discountLimit:10,unitsPerCase:20,kind:"finished",cost:0.61,material:"55mm screw caps (bulk)",qcChecks:["Thread fit on 55mm neck","Liner seated","Visual · flash / short shots"]},
+  {id:"i5",item:"Silicone Caps · 3-pack",sub:"pack of 3",channel:"wholesale",rate:4.99,floor:3.8,minimum:10,discountLimit:10,unitsPerCase:30,kind:"finished",cost:1.15,material:"Silicone caps (bulk)",qcChecks:["Seal test on 55mm neck","Visual · tears / voids"]},
  ],
  inventory:[
   {id:"s1",item:"5-Gallon Bottle · 2 caps",kind:"finished",onHand:412,committed:300,reorder:250,cost:4.85,unit:"bottles"},
@@ -1388,6 +1400,15 @@ export const todayIso=()=>new Date().toISOString().slice(0,10);
  * schedule, so it is long and random — and it drops the characters that get misread off a screen
  * (l/1, o/0), because someone will end up typing it into a tablet by hand.
  */
+/**
+ * Photos are keyed by the product's name. A listing needs a second one — a picture of the packed unit,
+ * so the floor can see what a finished Amazon box is meant to look like — so it is filed under a
+ * composed key rather than a second table nobody would remember to back up.
+ */
+export const packagingPhotoKey=(name:string)=>`${name}#packaging`;
+export const isPackagingKey=(key:string)=>key.endsWith("#packaging");
+export const photoKeyName=(key:string)=>key.replace(/#packaging$/,"");
+
 export const newFloorToken=()=>
   "floor-"+Array.from(crypto.getRandomValues(new Uint8Array(18)),b=>"abcdefghijkmnpqrstuvwxyz23456789"[b%32]).join("");
 

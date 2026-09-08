@@ -17,8 +17,8 @@ to invoicing or payments as touching real money.
 
 ## The state of play
 
-`main` is deployed and pushed through **`2905144`** — Phases 1-14. Phase 15 is in the tree, uncommitted:
-one product record replacing item rates, inventory details and SKUs.
+`main` is deployed and pushed through **`8dceec3`** — Phases 1-15. Phase 16 is in the tree, uncommitted:
+wholesale and Amazon kept apart, with the barcode and pack-out on the work order.
 
 The order-flow rebuild described below is committed (`c331858` model + board, `e4035f0` the transitions).
 The production rebuild is `4b2ed00` (Phase 1, model), `8c0bf42` (Phase 2, the calendar) and Phase 3 in
@@ -523,7 +523,7 @@ Four things from setting up real item rates.
   Photos hang off the item rate's *name*, which is also the inventory row's name, so one picture serves
   the inventory list, the build sheet and the tablet.
 
-### Phase 15 — one product (in the tree, uncommitted)
+### Phase 15 — one product (`8dceec3`)
 
 A product was three records on three screens — an item rate for its price and how it is made, an
 inventory row for how many there are, a SKU for the Amazon listing — joined by the item's name and
@@ -552,6 +552,31 @@ read and exactly one function that writes it.
 - **"We buy this in"** is now a real answer rather than an absence. An empty mould saved as `""` settles
   the question; `undefined` means nobody has said, and only that shows as *Mould not set*. Bought-in
   goods like cap packs were being flagged as unmakeable forever.
+
+### Phase 16 — the two sides kept apart (in the tree, uncommitted)
+
+Sales only sell wholesale. The floor has to label Amazon units with the right barcode or a pallet comes
+back. Those are different jobs needing different information, so a product now says **which side sells
+it** — wholesale, an Amazon listing, or both — and each side carries only what it needs.
+
+- **Products splits into two lists.** *Wholesale* is the bottles as customers buy them, and is what
+  sales quotes from. *Amazon listings* carry the listing code, the **barcode the floor labels with**,
+  what goes in the box with each bottle, and a **second photo of the packed unit** so the floor can see
+  what a finished box should look like. Materials & packaging is the third list.
+- **The work order shows the listing half only when there is one.** An Amazon job gets a panel with the
+  code, the barcode printed large enough to read across a bench, the packed-unit photo, and the
+  pack-with list. A wholesale job is the bottle and nothing else — `floorView` strips the listing
+  fields rather than trusting the screen to hide them, because carrying a code onto a wholesale pallet
+  is how one gets labelled with an Amazon barcode.
+- **A missing barcode says so** on the job — "not set — ask the office before labelling" — rather than
+  showing nothing and letting somebody guess.
+- The packed-unit photo shares the one photo table under a composed key (`name#packaging`), so there is
+  still one place photos live and one thing to back up.
+
+Nothing was lost in the Phase 15 merge: the SKU records were all still there and the plan still pointed
+at them. What went missing was the *list* — the code had become a field on the product with no screen
+showing the listings together. That is what this restores, with the barcode and pack-out detail the
+floor actually needs.
 
 ### Still open on products
 
@@ -648,7 +673,7 @@ on Render before the tablet is handed over.
 
 - **Verify money and capacity maths with a test, not by eye.** `tests/money.test.mjs`,
   `tests/payments.test.mjs`, `tests/stages.test.mjs`, `tests/authz.test.mjs`, `tests/production.test.mjs`.
-  Run with `node tests/<name>.test.mjs`. 448 assertions.
+  Run with `node tests/<name>.test.mjs`. 465 assertions.
 - **Never recompute a total QuickBooks already gave you.** Three separate bugs came from exactly this.
   `documentTotal` trusts a stored `total` first, then real `lines`, and only then the legacy single-item
   formula. Imported and locally created documents both persist `lines` + `total`.

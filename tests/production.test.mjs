@@ -501,8 +501,21 @@ t("and how it is packed",p.unitsPerCase>0&&!!p.packedAs);
 t("and its listing",p.sku==="D5-T0WT-Q5XP",`${p.sku}`);
 t("a material is a product too, just not one we sell",products(base).some(x=>x.kind==="raw"));
 
+console.log("\nThe two sides are kept apart:");
+t("a product says which side sells it",["wholesale","amazon","both"].includes(p.channel));
+t("the cap packs are wholesale only",productOf(base,"Screw Caps · 10-pack").channel==="wholesale");
+t("a listing carries a barcode for the floor to label from",!!productOf(base,"3-Gallon Bottle · 2 caps").barcode);
+t("and what goes in the box with the bottle",productOf(base,"3-Gallon Bottle · 2 caps").includes.length>0);
+t("a wholesale-only product carries neither",
+  !productOf(base,"Screw Caps · 10-pack").barcode&&productOf(base,"Screw Caps · 10-pack").includes.length===0);
+// Sales quote from one list, the floor works from the other; the screen splits on this.
+const prodUi=readFileSync(new URL("../app/components/products.tsx",import.meta.url),"utf8");
+t("the screen has a list for each side",/setTab\("wholesale"\)/.test(prodUi)&&/setTab\("amazon"\)/.test(prodUi));
+t("the listing block is only shown for a listing",/p\.channel!=="wholesale"&&<>/.test(prodUi));
+t("a listing can carry its own packed-unit photo",/packagingPhotoKey/.test(prodUi));
+
 console.log("\nOne save writes all three:");
-const saved=saveProduct(base,{...p,rate:11.5,onHand:999,sku:"NEW-ASIN-1"});
+const saved=saveProduct(base,{...p,rate:11.5,onHand:999,sku:"NEW-ASIN-1",channel:"amazon"});
 t("the price lands on the item rate",saved.itemRates.find(r=>r.item===p.name).rate===11.5);
 t("the count lands on the stock line",saved.inventory.find(i=>i.item===p.name).onHand===999);
 t("the listing lands on the sku",saved.skus.find(k=>k.itemId===p.name).id==="NEW-ASIN-1");

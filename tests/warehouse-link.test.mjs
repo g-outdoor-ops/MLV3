@@ -197,6 +197,27 @@ t("the tablet is given a URL, not the bytes",/api\/photo\?item=/.test(readFileSy
 const shrink=readFileSyncOf("../app/components/photo.ts");
 t("photos are shrunk in the browser before they are sent",/MAX_EDGE|toDataURL\("image\/jpeg"/.test(shrink));
 
+console.log("\nAn Amazon job carries what the floor labels and packs to:");
+const {packagingPhotoKey}=app;
+const v2=floorView(data,[{item:"3-Gallon Bottle · 2 caps",updatedAt:"2026-09-08"},
+  {item:packagingPhotoKey("3-Gallon Bottle · 2 caps"),updatedAt:"2026-09-08"}]);
+const amazonJob=v2.workOrders.find(w=>w.build.channel!=="wholesale"&&w.build.barcode);
+t("a job knows which side of the business it is for",!!amazonJob,`channels: ${v2.workOrders.map(w=>w.build.channel)}`);
+t("it carries the listing code",!!amazonJob.build.sku);
+// The barcode is the thing that must be right — a mislabelled unit is a returned pallet.
+t("and the barcode the floor labels with",amazonJob.build.barcode==="X00DEF5678",`${amazonJob.build.barcode}`);
+t("and what goes in the box with the bottle",amazonJob.build.includes.length>0);
+t("and a picture of the packed unit",!!amazonJob.build.packagingPhoto,`${amazonJob.build.packagingPhoto}`);
+// Sold to a customer rather than listed: the job is the bottle, and no listing detail comes with it —
+// carrying a code onto a wholesale pallet is how one gets labelled with an Amazon barcode.
+const asWholesale=normalize({...data,itemRates:data.itemRates.map(r=>r.item==="3-Gallon Bottle · 2 caps"?{...r,channel:"wholesale"}:r)});
+const wholesaleJob=floorView(asWholesale).workOrders.find(w=>w.item==="3-Gallon Bottle · 2 caps");
+t("a wholesale job is just the bottle",!wholesaleJob.build.sku&&!wholesaleJob.build.barcode);
+t("and nothing extra to pack with it",wholesaleJob.build.includes.length===0);
+t("even though the same product has a listing on the other side",!!amazonJob.build.sku);
+t("the packed-unit photo is filed separately from the product photo",
+  packagingPhotoKey("x")!=="x"&&packagingPhotoKey("x").startsWith("x"));
+
 console.log("\nNothing about this endpoint may sit in a cache:");
 const route=readFileSyncRoute();
 t("the answer is no-store",/NO_STORE/.test(route)&&/"cache-control":"no-store"/.test(route));

@@ -364,3 +364,8 @@
 .prod-photo-actions .secondary{cursor:pointer}
 .prod-modal .full-field{display:block;margin-top:12px;font-size:12px;font-weight:800}
 .prod-modal .full-field input{display:block;width:100%;border:1px solid #bcc9c0;border-radius:9px;padding:11px;margin-top:6px}
+.prod-lead{margin:0 0 14px;color:#6d7a70;font-size:.85rem}
+.prod-tags em.bar{background:#eef3ef;color:#3d4c43;font-family:"Courier New",monospace}
+.prod-photo-label{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:#7b8880}
+.prod-inc{display:grid;grid-template-columns:1fr 90px auto;gap:8px;align-items:center;margin-bottom:8px}
+.prod-inc input{border:1px solid #bcc9c0;border-radius:9px;padding:10px;font-size:.9rem}

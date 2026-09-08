@@ -19,7 +19,7 @@
 // The .ts extension is deliberate: it is what Node's own resolver wants, so this module can be loaded
 // straight from tests/warehouse-link.test.mjs and checked as it ships rather than as a copy of itself.
 import { ASSEMBLY_LINE, HOLD_REASONS, JOB_COMPLETE, JOB_NOT_STARTED, JOB_PACKAGING, JOB_PRODUCTION, JOB_STAGES, blockJob, blockedFor, consume, dueIso, jobForecast,
-  jobPaused, jobPriority, jobReadiness, jobRemaining, jobStageOf, newFloorToken, packingPlan, packingUses, pauseJob, recordPacking, recordStep, resumeJob, setJobStage, runConsumption, stepProgress,
+  jobPaused, jobPriority, jobReadiness, jobRemaining, jobStageOf, newFloorToken, packagingPhotoKey, packingPlan, packingUses, pauseJob, recordPacking, recordStep, resumeJob, setJobStage, runConsumption, stepProgress,
   type AppData, type Blank, type JobHold, type JobPriority, type Machine, type MaterialCheck, type ProdDay, type ProdStep,
   type PackingPlan, type PackingRecord, type Sku, type WorkOrder } from "../app-data.ts";
 
@@ -30,7 +30,11 @@ export type FloorOrder={id:string;customer:string;item:string;quantity:number;du
 /** The build sheet — what somebody making this for the first time needs in front of them. */
 export type FloorBuild={item:string;sub?:string;size?:string;mold?:string;colour?:string;material?:string;
   caps:{component:string;qty:number}[];label?:string;boxSize?:string;perCase?:number;casesPerPallet?:number;
-  palletPattern?:string;instructions?:string;photo?:string;qcChecks:string[]};
+  palletPattern?:string;instructions?:string;photo?:string;qcChecks:string[];
+  // The listing half. Only an Amazon job has these, and the floor has to get them right: a bottle
+  // labelled with the wrong barcode is a pallet coming back.
+  channel:"wholesale"|"amazon"|"both";sku?:string;barcode?:string;
+  includes:{item:string;qty:number}[];packagingPhoto?:string};
 export type FloorWork={id:string;orderId?:string;kind?:string;item:string;quantity:number;good:number;scrap:number;
   remaining:number;status:string;line:string;date:string;purpose:string;qcNote?:string;
   stage:number;paused:boolean;hold?:JobHold;blockedMinutes:number;operator?:string;startedAt?:string;
@@ -92,6 +96,7 @@ export function floorView(data:AppData,photos:{item:string;updatedAt:string}[]=[
   const open=(data.workOrders||[]).filter(w=>jobStageOf(w)<JOB_COMPLETE);
   const workOrders:FloorWork[]=open.map(w=>{
     const rate=data.itemRates.find(r=>r.item===w.item);
+    const channel=rate?.channel||"wholesale";
     const readiness=jobReadiness(w,data);
     const forecast=jobForecast(w);
     return {
@@ -104,7 +109,15 @@ export function floorView(data:AppData,photos:{item:string;updatedAt:string}[]=[
         mold:rate?.mold,colour:rate?.colour,material:rate?.material,caps:rate?.caps||[],label:rate?.label,
         boxSize:rate?.boxSize,perCase:rate?.unitsPerCase,casesPerPallet:rate?.casesPerPallet,
         palletPattern:rate?.palletPattern,instructions:rate?.instructions,photo:photoUrl(w.item)||rate?.photo,
-        qcChecks:rate?.qcChecks||[]},
+        qcChecks:rate?.qcChecks||[],
+        // A wholesale job is the bottle and nothing else. Carrying a listing code onto one is how
+        // somebody ends up labelling a customer's pallet with an Amazon barcode.
+        channel,
+        ...(channel==="wholesale"?{includes:[]}:{
+          sku:(data.skus||[]).find(k=>k.itemId===w.item)?.id,
+          barcode:rate?.barcode,includes:rate?.includes||[],
+          packagingPhoto:photoUrl(packagingPhotoKey(w.item))}),
+      },
       ...(forecast?{rate:{perHour:forecast.perHour,finishAt:forecast.finishAt}}:{}),
       packing:{...packingPlan(w,data.itemRates),record:w.packing},
     };

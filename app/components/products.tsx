@@ -11,23 +11,24 @@
 // listing code, and its photo. One form, one save, and saveProduct keeps the three underlying records
 // in step so they cannot come apart again.
 import { useEffect, useState } from "react";
-import { CAP_KINDS, DEFAULT_BLANKS, deleteProduct, freeStock, productUses, products, saveProduct,
+import { CAP_KINDS, DEFAULT_BLANKS, deleteProduct, freeStock, packagingPhotoKey, productUses, products, saveProduct,
   type Blank, type Product } from "../app-data";
 import { Kpi, num, useApp, usd, usd2 } from "./store";
 import { CatalogueEditor as Moulds } from "./owner";
 import { listPhotoItems, removePhoto, savePhoto } from "./photo";
 
-const BLANK:Product={name:"",kind:"finished",rate:0,minimum:50,discountLimit:5,cost:0,caps:[],
-  unitsPerCase:2,packedAs:"boxed",shipsAs:"boxed",onHand:0,committed:0,reorder:0};
+const BLANK:Product={name:"",kind:"finished",channel:"wholesale",rate:0,minimum:50,discountLimit:5,cost:0,
+  caps:[],includes:[],unitsPerCase:2,packedAs:"boxed",shipsAs:"boxed",onHand:0,committed:0,reorder:0};
 
 export function ProductsWorkspace(){
   const {data,commit,notify}=useApp();
   const [editing,setEditing]=useState<{p:Product;was?:string}|null>(null);
   const [photos,setPhotos]=useState<Record<string,string>>({});
-  const [tab,setTab]=useState<"finished"|"raw">("finished");
+  const [tab,setTab]=useState<"wholesale"|"amazon"|"raw">("wholesale");
   useEffect(()=>{listPhotoItems().then(setPhotos).catch(()=>{})},[]);
   const all=products(data);
-  const rows=all.filter(p=>p.kind===(tab==="raw"?"raw":"finished"));
+  const rows=tab==="raw"?all.filter(p=>p.kind==="raw")
+    :all.filter(p=>p.kind==="finished"&&(tab==="amazon"?p.channel!=="wholesale":p.channel!=="amazon"));
   const value=all.reduce((a,p)=>a+p.onHand*p.cost,0);
   const listed=all.filter(p=>p.sku).length;
   const noBlank=all.filter(p=>p.kind==="finished"&&p.blankId===undefined).length;
@@ -36,20 +37,27 @@ export function ProductsWorkspace(){
     <div className="heading-row">
       <div><p className="eyebrow">One record per product</p><h1>Products</h1>
         <p className="intro">What it is, what it costs, what it sells for, how it is made, how it is packed, how many are on the shelf, and its photo — in one place.</p></div>
-      <button className="primary" onClick={()=>setEditing({p:{...BLANK,kind:tab==="raw"?"raw":"finished"}})}>+ New product</button>
+      <button className="primary" onClick={()=>setEditing({p:{...BLANK,kind:tab==="raw"?"raw":"finished",channel:tab==="amazon"?"amazon":"wholesale"}})}>
+        + New {tab==="raw"?"material":tab==="amazon"?"listing":"product"}</button>
     </div>
 
     <div className="recap four">
       <Kpi label="Products" value={String(all.filter(p=>p.kind==="finished").length)} note={`${all.filter(p=>p.kind==="raw").length} materials`}/>
       <Kpi label="Stock value" value={usd(value)} note="on hand at cost"/>
-      <Kpi label="Listed on Amazon" value={String(listed)}/>
+      <Kpi label="Amazon listings" value={String(listed)} note={`${all.filter(p=>p.kind==="finished"&&p.channel!=="amazon").length} wholesale`}/>
       <Kpi label="Mould not set" value={String(noBlank)} note={noBlank?"production cannot schedule these until each says which mould, or that we buy it in":"every product has been answered"} warn={noBlank>0}/>
     </div>
 
-    <div className="segmented" style={{marginBottom:12}}>
-      <button className={tab==="finished"?"active":""} onClick={()=>setTab("finished")}>Products</button>
+    <div className="segmented" style={{marginBottom:6}}>
+      <button className={tab==="wholesale"?"active":""} onClick={()=>setTab("wholesale")}>Wholesale</button>
+      <button className={tab==="amazon"?"active":""} onClick={()=>setTab("amazon")}>Amazon listings</button>
       <button className={tab==="raw"?"active":""} onClick={()=>setTab("raw")}>Materials &amp; packaging</button>
     </div>
+    <p className="prod-lead">{tab==="wholesale"
+      ?"Bottles as they are sold to customers. This is the list sales quotes from."
+      :tab==="amazon"
+      ?"Listings. Each carries the code and barcode the floor labels with, a picture of the packed unit, and what goes in the box."
+      :"What the products are made and packed from."}</p>
 
     <div className="prod-grid">
       {rows.map(p=>{
@@ -67,6 +75,8 @@ export function ProductsWorkspace(){
             {p.sub&&<small>{p.sub}</small>}
             <div className="prod-tags">
               {p.sku&&<em className="sku">{p.sku}</em>}
+              {p.barcode&&<em className="bar">{p.barcode}</em>}
+              {p.channel==="both"&&<em>Both channels</em>}
               {p.kind==="finished"&&p.blankId===undefined&&<em className="warn">Mould not set</em>}
               {p.kind==="finished"&&<em>{p.packedAs==="loose"?"Not boxed":`${p.unitsPerCase}/box`}</em>}
               {p.shipsAs!=="boxed"&&<em>{p.perPallet||"?"}/pallet</em>}
@@ -86,12 +96,13 @@ export function ProductsWorkspace(){
 
     {editing&&<ProductEditor product={editing.p} was={editing.was}
       photo={editing.was?photos[editing.was]:undefined}
-      onPhoto={async(file)=>{
+      packagingPhoto={editing.was?photos[packagingPhotoKey(editing.was)]:undefined}
+      onPhoto={async(file,packaging)=>{
         if(!editing.was)throw new Error("Save the product first, then add its photo");
-        await savePhoto(editing.was,file);
+        await savePhoto(packaging?packagingPhotoKey(editing.was):editing.was,file);
         setPhotos(await listPhotoItems());
       }}
-      onPhotoClear={async()=>{if(!editing.was)return;await removePhoto(editing.was);setPhotos(await listPhotoItems())}}
+      onPhotoClear={async(packaging)=>{if(!editing.was)return;await removePhoto(packaging?packagingPhotoKey(editing.was):editing.was);setPhotos(await listPhotoItems())}}
       onClose={()=>setEditing(null)}
       onSave={p=>{
         commit(v=>saveProduct(v,p,editing.was),"product.save",`${p.name} saved`);
@@ -109,9 +120,9 @@ export function ProductsWorkspace(){
 }
 
 /** Everything about one product, in the order somebody actually thinks about it. */
-function ProductEditor({product,was,photo,onSave,onDelete,onClose,onPhoto,onPhotoClear}:{
-  product:Product;was?:string;photo?:string;onSave:(p:Product)=>void;onDelete:()=>void;onClose:()=>void;
-  onPhoto:(f:File)=>Promise<void>;onPhotoClear:()=>Promise<void>;
+function ProductEditor({product,was,photo,packagingPhoto,onSave,onDelete,onClose,onPhoto,onPhotoClear}:{
+  product:Product;was?:string;photo?:string;packagingPhoto?:string;onSave:(p:Product)=>void;onDelete:()=>void;onClose:()=>void;
+  onPhoto:(f:File,packaging?:boolean)=>Promise<void>;onPhotoClear:(packaging?:boolean)=>Promise<void>;
 }){
   const {data}=useApp();
   const [p,setP]=useState<Product>(product);
@@ -128,9 +139,9 @@ function ProductEditor({product,was,photo,onSave,onDelete,onClose,onPhoto,onPhot
     if(!p.name.trim()){setErr("Give it a name — everything else keys off it");return}
     onSave({...p,name:p.name.trim()});
   };
-  const pick=async(f?:File)=>{
+  const pick=async(f?:File,packaging?:boolean)=>{
     if(!f)return;setBusy(true);setErr("");
-    try{await onPhoto(f)}catch(e){setErr(e instanceof Error?e.message:"That photo could not be saved")}
+    try{await onPhoto(f,packaging)}catch(e){setErr(e instanceof Error?e.message:"That photo could not be saved")}
     setBusy(false);
   };
 
@@ -150,6 +161,7 @@ function ProductEditor({product,was,photo,onSave,onDelete,onClose,onPhoto,onPhot
             :<span>{was?"No photo":"Save first, then add a photo"}</span>}
         </div>
         <div className="prod-photo-actions">
+          <b className="prod-photo-label">The product</b>
           <label className="secondary">{busy?"Working…":photo?"Replace photo":"Add photo"}
             <input type="file" accept="image/*" hidden disabled={!was||busy} onChange={e=>{pick(e.target.files?.[0]);e.target.value=""}}/></label>
           {photo&&<button className="cancel" onClick={()=>onPhotoClear()}>Remove photo</button>}
@@ -167,6 +179,15 @@ function ProductEditor({product,was,photo,onSave,onDelete,onClose,onPhoto,onPhot
       </div>
 
       {p.kind==="finished"&&<>
+        <h3 className="prod-sec">Which side sells it</h3>
+        <div className="form-grid">
+          <label>Sold as<select value={p.channel} onChange={e=>set({channel:e.target.value as Product["channel"]})}>
+            <option value="wholesale">Wholesale — bottles to customers</option>
+            <option value="amazon">Amazon listing</option>
+            <option value="both">Both</option>
+          </select></label>
+        </div>
+
         <h3 className="prod-sec">What it sells for</h3>
         <div className="form-grid">
           <label>List price (each)<input type="number" step="0.05" value={p.rate} onChange={e=>set({rate:num0(e.target.value)})}/></label>
@@ -178,6 +199,40 @@ function ProductEditor({product,was,photo,onSave,onDelete,onClose,onPhoto,onPhot
           {p.sku&&<label>Sold on<select value={p.channel||"amazon"} onChange={e=>set({channel:e.target.value as Product["channel"]})}>
             <option value="amazon">Amazon</option><option value="wholesale">Wholesale</option><option value="both">Both</option></select></label>}
         </div>
+
+        {p.channel!=="wholesale"&&<>
+          <h3 className="prod-sec">The listing — what the floor labels and packs</h3>
+          <div className="form-grid">
+            <label>Listing code (SKU)<input value={p.sku||""} onChange={e=>set({sku:e.target.value.trim()||undefined})} placeholder="ASIN or seller SKU"/></label>
+            <label>Barcode on the label<input value={p.barcode||""} onChange={e=>set({barcode:e.target.value.trim()})} placeholder="FNSKU or UPC — the floor labels from this"/></label>
+          </div>
+          <p className="hint">The barcode is shown on the work order. A mislabelled unit is a returned pallet, so it is put in front of whoever is labelling rather than looked up somewhere else.</p>
+
+          <div className="prod-edit-top" style={{marginTop:12}}>
+            <div className="prod-shot big">
+              {packagingPhoto
+                // eslint-disable-next-line @next/next/no-img-element
+                ?<img src={packagingPhoto} alt={`${p.name} packed`}/>
+                :<span>{was?"No packed-unit photo":"Save first, then add one"}</span>}
+            </div>
+            <div className="prod-photo-actions">
+              <b className="prod-photo-label">Packed unit</b>
+              <label className="secondary">{busy?"Working…":packagingPhoto?"Replace":"Add packaging photo"}
+                <input type="file" accept="image/*" hidden disabled={!was||busy} onChange={e=>{pick(e.target.files?.[0],true);e.target.value=""}}/></label>
+              {packagingPhoto&&<button className="cancel" onClick={()=>onPhotoClear(true)}>Remove</button>}
+              <p className="hint">What a finished box should look like — the floor checks against it.</p>
+            </div>
+          </div>
+
+          <h3 className="prod-sec">Packed in the box with the bottle</h3>
+          {p.includes.map((inc,i)=><div className="prod-inc" key={i}>
+            <input value={inc.item} list="prod-all" onChange={e=>set({includes:p.includes.map((x,k)=>k===i?{...x,item:e.target.value}:x)})} placeholder="e.g. Screw cap, instruction card"/>
+            <input type="number" min="1" value={inc.qty} onChange={e=>set({includes:p.includes.map((x,k)=>k===i?{...x,qty:Math.max(1,num0(e.target.value))}:x)})}/>
+            <button className="cancel" onClick={()=>set({includes:p.includes.filter((_,k)=>k!==i)})}>Remove</button>
+          </div>)}
+          <button className="secondary" onClick={()=>set({includes:[...p.includes,{item:"",qty:1}]})}>+ Add something to the box</button>
+          <datalist id="prod-all">{products(data).map(x=><option key={x.name} value={x.name}/>)}</datalist>
+        </>}
 
         <h3 className="prod-sec">How it is made</h3>
         <div className="form-grid">

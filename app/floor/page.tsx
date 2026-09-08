@@ -263,6 +263,24 @@ function JobCard({job,view,busy,panel,setPanel,send,pinned,token,onClose}:{job:F
       <button className="wf-btn" disabled={busy} onClick={()=>send({op:"job.resume",woId:job.id},`${job.id} back on`)}>Problem fixed — resume</button>
     </div>}
 
+    {job.build.channel!=="wholesale"&&(job.build.sku||job.build.barcode||job.build.includes.length>0)&&
+      <section className="wf-listing">
+        <h3>Amazon listing — label and pack to this</h3>
+        <div className="wf-listing-top">
+          <div className="wf-codes">
+            {job.build.sku&&<div><i>Listing code</i><b>{job.build.sku}</b></div>}
+            {job.build.barcode
+              ?<div className="wf-barcode"><i>Barcode on the label</i><b>{job.build.barcode}</b></div>
+              :<div className="wf-barcode missing"><i>Barcode</i><b>not set — ask the office before labelling</b></div>}
+          </div>
+          {job.build.packagingPhoto&&<Shot photo={job.build.packagingPhoto} alt={`${job.item} packed`} token={token} small/>}
+        </div>
+        {job.build.includes.length>0&&<div className="wf-includes">
+          <i>In the box with each bottle</i>
+          <ul>{job.build.includes.map(x=><li key={x.item}><b>{x.qty}×</b> {x.item}</li>)}</ul>
+        </div>}
+      </section>}
+
     <div className="wf-two">
       <section className="wf-mini">
         <h3>Materials</h3>
